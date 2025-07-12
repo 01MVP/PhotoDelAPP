@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Photos
 
 struct SwipePhotoView: View {
     @EnvironmentObject var dataManager: DataManager
@@ -18,16 +19,23 @@ struct SwipePhotoView: View {
     @State private var rotationAngle: Double = 0
     @State private var showDeleteConfirm = false
     @State private var swipeDirection: SwipeDirection?
+    @State private var showPhotoAccessAlert = false
     
     enum SwipeDirection {
         case left, right, up, down
     }
     
     private var currentPhoto: Photo? {
-        dataManager.getCurrentPhoto()
+        return dataManager.useRealPhotos ? nil : dataManager.getCurrentPhoto()
+    }
+    
+    private var currentRealPhoto: PHAsset? {
+        return dataManager.useRealPhotos ? dataManager.getCurrentRealPhoto() : nil
     }
     
     private var filteredPhotos: [Photo] {
+        if dataManager.useRealPhotos { return [] }
+        
         if let category = selectedCategory {
             return dataManager.getPhotos(for: category)
         } else if let timeGroup = selectedTimeGroup {
@@ -35,6 +43,20 @@ struct SwipePhotoView: View {
         } else {
             return dataManager.photos
         }
+    }
+    
+    private var filteredRealPhotos: [PHAsset] {
+        guard dataManager.useRealPhotos else { return [] }
+        
+        if let category = selectedCategory {
+            return dataManager.getRealPhotos(for: category)
+        } else {
+            return dataManager.photoLibraryManager.allPhotos
+        }
+    }
+    
+    private var totalPhotosCount: Int {
+        return dataManager.useRealPhotos ? filteredRealPhotos.count : filteredPhotos.count
     }
     
     var body: some View {
@@ -85,7 +107,7 @@ struct SwipePhotoView: View {
                     .font(.system(size: 18, weight: .bold))
                     .foregroundColor(.white)
                 
-                Text("\(selectedCategory?.rawValue ?? selectedTimeGroup?.rawValue ?? "全部相册") · \(filteredPhotos.count) 张照片")
+                Text("\(selectedCategory?.rawValue ?? selectedTimeGroup?.rawValue ?? "全部相册") · \(totalPhotosCount) 张照片")
                     .font(.system(size: 14, weight: .regular))
                     .foregroundColor(.gray)
             }
@@ -121,31 +143,65 @@ struct SwipePhotoView: View {
                 Spacer()
                 
                 if let photo = currentPhoto {
+                    // 虚拟照片显示
                     ZStack {
-                        // 照片卡片
                         PhotoCard(photo: photo)
                             .frame(width: geometry.size.width - 48, height: 450)
                             .offset(dragOffset)
                             .rotationEffect(.degrees(rotationAngle))
                             .scaleEffect(1.0 - abs(dragOffset.width) / 1000)
-                            .gesture(
-                                DragGesture()
-                                    .onChanged { value in
-                                        dragOffset = value.translation
-                                        rotationAngle = Double(value.translation.width / 10)
-                                    }
-                                    .onEnded { value in
-                                        handleSwipeGesture(translation: value.translation)
-                                    }
-                            )
+                            .gesture(createDragGesture())
                             .animation(.spring(response: 0.5, dampingFraction: 0.8), value: dragOffset)
                         
-                        // 滑动指示器
                         if abs(dragOffset.width) > 50 {
                             SwipeIndicator(direction: dragOffset.width < 0 ? .left : .right)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let realPhoto = currentRealPhoto {
+                    // 真实照片显示
+                    ZStack {
+                        RealPhotoCard(asset: realPhoto, photoLibraryManager: dataManager.photoLibraryManager)
+                            .frame(width: geometry.size.width - 48, height: 450)
+                            .offset(dragOffset)
+                            .rotationEffect(.degrees(rotationAngle))
+                            .scaleEffect(1.0 - abs(dragOffset.width) / 1000)
+                            .gesture(createDragGesture())
+                            .animation(.spring(response: 0.5, dampingFraction: 0.8), value: dragOffset)
+                        
+                        if abs(dragOffset.width) > 50 {
+                            SwipeIndicator(direction: dragOffset.width < 0 ? .left : .right)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if dataManager.useRealPhotos && dataManager.photoLibraryManager.authorizationStatus != .authorized {
+                    // 需要照片权限
+                    VStack(spacing: 20) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 60, weight: .medium))
+                            .foregroundColor(.blue)
+                        
+                        Text("需要访问照片库")
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundColor(.white)
+                        
+                        Text("请允许访问您的照片库来开始整理照片")
+                            .font(.system(size: 16, weight: .regular))
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.center)
+                        
+                        Button(action: { 
+                            dataManager.requestPhotoLibraryAccess()
+                        }) {
+                            Text("授权访问照片库")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 12)
+                                .background(Color.blue)
+                                .cornerRadius(8)
+                        }
+                    }
                 } else {
                     // 没有更多照片
                     VStack(spacing: 20) {
@@ -239,7 +295,11 @@ struct SwipePhotoView: View {
                     title: "收藏",
                     color: .pink
                 ) {
-                    dataManager.favoriteCurrentPhoto()
+                    if dataManager.useRealPhotos {
+                        dataManager.favoriteCurrentRealPhoto()
+                    } else {
+                        dataManager.favoriteCurrentPhoto()
+                    }
                     resetCardPosition()
                 }
                 
@@ -251,7 +311,11 @@ struct SwipePhotoView: View {
                     title: "删除",
                     color: .red
                 ) {
-                    dataManager.deleteCurrentPhoto()
+                    if dataManager.useRealPhotos {
+                        dataManager.deleteCurrentRealPhoto()
+                    } else {
+                        dataManager.deleteCurrentPhoto()
+                    }
                     resetCardPosition()
                 }
                 
@@ -288,24 +352,51 @@ struct SwipePhotoView: View {
     }
     
     // MARK: - 手势处理
+    private func createDragGesture() -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                dragOffset = value.translation
+                rotationAngle = Double(value.translation.width / 10)
+            }
+            .onEnded { value in
+                handleSwipeGesture(translation: value.translation)
+            }
+    }
+    
     private func handleSwipeGesture(translation: CGSize) {
         let threshold: CGFloat = 100
         
         if abs(translation.width) > threshold {
             if translation.width < 0 {
                 // 左滑删除
-                dataManager.deleteCurrentPhoto()
+                if dataManager.useRealPhotos {
+                    dataManager.deleteCurrentRealPhoto()
+                } else {
+                    dataManager.deleteCurrentPhoto()
+                }
             } else {
                 // 右滑保留
-                dataManager.keepCurrentPhoto()
+                if dataManager.useRealPhotos {
+                    dataManager.moveToNextRealPhoto()
+                } else {
+                    dataManager.keepCurrentPhoto()
+                }
             }
         } else if abs(translation.height) > threshold {
             if translation.height < 0 {
                 // 上滑收藏
-                dataManager.favoriteCurrentPhoto()
+                if dataManager.useRealPhotos {
+                    dataManager.favoriteCurrentRealPhoto()
+                } else {
+                    dataManager.favoriteCurrentPhoto()
+                }
             } else {
                 // 下滑跳过
-                dataManager.skipCurrentPhoto()
+                if dataManager.useRealPhotos {
+                    dataManager.skipCurrentRealPhoto()
+                } else {
+                    dataManager.skipCurrentPhoto()
+                }
             }
         }
         
@@ -362,6 +453,73 @@ struct PhotoCard: View {
                 )
             }
         }
+    }
+}
+
+// MARK: - 真实照片卡片
+struct RealPhotoCard: View {
+    let asset: PHAsset
+    let photoLibraryManager: PhotoLibraryManager
+    
+    var body: some View {
+        ZStack {
+            // 显示真实照片
+            RealPhotoView(
+                asset: asset, 
+                photoLibraryManager: photoLibraryManager, 
+                size: CGSize(width: 350, height: 450)
+            )
+            
+            // 底部信息覆盖层
+            VStack {
+                Spacer()
+                
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(formatDate(asset.creationDate))
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white)
+                        
+                        HStack(spacing: 8) {
+                            Text("真实照片")
+                                .font(.system(size: 12, weight: .regular))
+                                .foregroundColor(.white.opacity(0.8))
+                            
+                            if asset.mediaType == .video {
+                                Text("· 视频")
+                                    .font(.system(size: 12, weight: .regular))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                            
+                            if asset.isFavorite {
+                                Text("· 已收藏")
+                                    .font(.system(size: 12, weight: .regular))
+                                    .foregroundColor(.red.opacity(0.8))
+                            }
+                        }
+                    }
+                    
+                    Spacer()
+                }
+                .padding(16)
+                .background(
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.7)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            }
+        }
+    }
+    
+    private func formatDate(_ date: Date?) -> String {
+        guard let date = date else { return "未知日期" }
+        
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy年M月d日 HH:mm"
+        return formatter.string(from: date)
     }
 }
 

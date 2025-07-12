@@ -7,12 +7,19 @@
 
 import Foundation
 import SwiftUI
+import Photos
 
 class DataManager: ObservableObject {
     @Published var photos: [Photo] = []
     @Published var albums: [Album] = []
     @Published var organizeStats = OrganizeStats()
     @Published var currentSwipeIndex = 0
+    
+    // 真实照片管理器
+    @Published var photoLibraryManager = PhotoLibraryManager()
+    @Published var useRealPhotos = false
+    @Published var authorizationRequested = false
+    @Published var currentRealPhotoIndex = 0
     
     // 虚拟照片名称（使用系统图标代替真实图片）
     private let samplePhotoNames = [
@@ -29,6 +36,18 @@ class DataManager: ObservableObject {
     
     init() {
         generateSampleData()
+        setupPhotoLibraryManager()
+    }
+    
+    private func setupPhotoLibraryManager() {
+        // 延迟设置，避免启动时立即调用Photos API
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            // 监听授权状态变化
+            if self?.photoLibraryManager.authorizationStatus == .authorized {
+                self?.useRealPhotos = true
+                self?.photoLibraryManager.loadPhotos()
+            }
+        }
     }
     
     // MARK: - 生成示例数据
@@ -242,5 +261,101 @@ class DataManager: ObservableObject {
         }
         updateStats()
         objectWillChange.send()
+    }
+    
+    // MARK: - 真实照片操作
+    func requestPhotoLibraryAccess() {
+        authorizationRequested = true
+        photoLibraryManager.requestAuthorization()
+    }
+    
+    func switchToRealPhotos() {
+        if photoLibraryManager.authorizationStatus == .authorized {
+            useRealPhotos = true
+            photoLibraryManager.loadPhotos()
+        } else {
+            requestPhotoLibraryAccess()
+        }
+    }
+    
+    func switchToVirtualPhotos() {
+        useRealPhotos = false
+    }
+    
+    func getCurrentRealPhoto() -> PHAsset? {
+        guard useRealPhotos && currentRealPhotoIndex < photoLibraryManager.allPhotos.count else { return nil }
+        return photoLibraryManager.allPhotos[currentRealPhotoIndex]
+    }
+    
+    func moveToNextRealPhoto() {
+        if currentRealPhotoIndex < photoLibraryManager.allPhotos.count - 1 {
+            currentRealPhotoIndex += 1
+        }
+    }
+    
+    func deleteCurrentRealPhoto() {
+        guard let currentPhoto = getCurrentRealPhoto() else { return }
+        
+        photoLibraryManager.deletePhotos([currentPhoto]) { [weak self] success, error in
+            if success {
+                self?.organizeStats.deletedPhotos += 1
+                self?.organizeStats.spaceSaved += 3.0 // 估算3MB
+                self?.moveToNextRealPhoto()
+                self?.objectWillChange.send()
+            } else if let error = error {
+                print("删除照片失败: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    func favoriteCurrentRealPhoto() {
+        guard let currentPhoto = getCurrentRealPhoto() else { return }
+        
+        photoLibraryManager.toggleFavorite(currentPhoto) { [weak self] success, error in
+            if success {
+                self?.organizeStats.favoritedPhotos += 1
+                self?.moveToNextRealPhoto()
+                self?.objectWillChange.send()
+            } else if let error = error {
+                print("收藏照片失败: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    func skipCurrentRealPhoto() {
+        moveToNextRealPhoto()
+        objectWillChange.send()
+    }
+    
+    // MARK: - 统一接口（兼容虚拟和真实照片）
+    func getTotalPhotosCount() -> Int {
+        return useRealPhotos ? photoLibraryManager.totalPhotosCount : photos.count
+    }
+    
+    func getVideosCount() -> Int {
+        return useRealPhotos ? photoLibraryManager.videosCount : photos.filter { $0.isVideo }.count
+    }
+    
+    func getScreenshotsCount() -> Int {
+        return useRealPhotos ? photoLibraryManager.screenshotsCount : photos.filter { $0.category == .screenshots }.count
+    }
+    
+    func getFavoritesCount() -> Int {
+        return useRealPhotos ? photoLibraryManager.favoritesCount : photos.filter { $0.status == .favorited }.count
+    }
+    
+    func getRealPhotos(for category: PhotoCategory) -> [PHAsset] {
+        guard useRealPhotos else { return [] }
+        
+        switch category {
+        case .all:
+            return photoLibraryManager.allPhotos
+        case .videos:
+            return photoLibraryManager.videos
+        case .screenshots:
+            return photoLibraryManager.screenshots
+        case .favorites:
+            return photoLibraryManager.favorites
+        }
     }
 } 

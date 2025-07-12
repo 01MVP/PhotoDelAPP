@@ -32,6 +32,42 @@ struct HomeView: View {
                         }
                         .padding(.top, 20)
                         
+                        // 照片源切换
+                        VStack(spacing: 12) {
+                            HStack {
+                                Text("照片源")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.white)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 24)
+                            
+                            VStack(spacing: 8) {
+                                // 虚拟照片选项
+                                PhotoSourceOption(
+                                    title: "虚拟照片演示",
+                                    subtitle: "1,234张演示照片",
+                                    icon: "photo.stack",
+                                    isSelected: !dataManager.useRealPhotos
+                                ) {
+                                    dataManager.switchToVirtualPhotos()
+                                }
+                                
+                                // 真实照片选项
+                                PhotoSourceOption(
+                                    title: "我的照片库",
+                                    subtitle: dataManager.photoLibraryManager.authorizationStatus == .authorized ? 
+                                        "\(dataManager.photoLibraryManager.totalPhotosCount)张真实照片" : "需要访问权限",
+                                    icon: "photo.on.rectangle.angled",
+                                    isSelected: dataManager.useRealPhotos,
+                                    isEnabled: dataManager.photoLibraryManager.authorizationStatus == .authorized
+                                ) {
+                                    dataManager.switchToRealPhotos()
+                                }
+                            }
+                            .padding(.horizontal, 24)
+                        }
+                        
                         // 照片分类部分
                         VStack(alignment: .leading, spacing: 12) {
                             Text("照片分类")
@@ -43,7 +79,7 @@ struct HomeView: View {
                                 ForEach(PhotoCategory.allCases, id: \.self) { category in
                                     CategoryCard(
                                         category: category,
-                                        count: dataManager.getPhotoCount(for: category)
+                                        count: getPhotoCount(for: category)
                                     ) {
                                         selectedCategory = category
                                         showSwipeView = true
@@ -88,6 +124,24 @@ struct HomeView: View {
                 selectedTimeGroup: selectedTimeGroup
             )
             .environmentObject(dataManager)
+        }
+    }
+    
+    // MARK: - Helper Methods
+    private func getPhotoCount(for category: PhotoCategory) -> Int {
+        if dataManager.useRealPhotos {
+            switch category {
+            case .all:
+                return dataManager.photoLibraryManager.totalPhotosCount
+            case .videos:
+                return dataManager.photoLibraryManager.videosCount
+            case .screenshots:
+                return dataManager.photoLibraryManager.screenshotsCount
+            case .favorites:
+                return dataManager.photoLibraryManager.favoritesCount
+            }
+        } else {
+            return dataManager.getPhotoCount(for: category)
         }
     }
 }
@@ -201,6 +255,61 @@ struct TimeGroupCard: View {
         )
         .scaleEffect(1.0)
         .animation(.easeInOut(duration: 0.1), value: false)
+    }
+}
+
+// MARK: - 照片源选择组件
+struct PhotoSourceOption: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let isSelected: Bool
+    var isEnabled: Bool = true
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                // 图标
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isSelected ? Color.blue : Color.gray.opacity(0.3))
+                        .frame(width: 40, height: 40)
+                    
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.white)
+                }
+                
+                // 文字信息
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(isEnabled ? .white : .gray)
+                    
+                    Text(subtitle)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundColor(.gray)
+                }
+                
+                Spacer()
+                
+                // 选择指示器
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundColor(isSelected ? .blue : .gray)
+            }
+            .padding(12)
+        }
+        .disabled(!isEnabled)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.gray.opacity(isSelected ? 0.15 : 0.1))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(isSelected ? Color.blue.opacity(0.3) : Color.gray.opacity(0.2), lineWidth: 1)
+                )
+        )
     }
 }
 
