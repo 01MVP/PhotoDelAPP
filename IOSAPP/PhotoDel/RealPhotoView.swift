@@ -54,7 +54,7 @@ struct RealPhotoView: View {
         .onAppear {
             loadImage()
         }
-        .onChange(of: asset) { _ in
+        .onChange(of: asset) { _, _ in
             loadImage()
         }
     }

@@ -6,12 +6,17 @@
 //
 
 import SwiftUI
+import Photos
 
 struct AlbumsView: View {
     @EnvironmentObject var dataManager: DataManager
     @State private var searchText = ""
-    @State private var showingAddAlbum = false
-    @State private var editingAlbum: Album?
+    @State private var showingCreateAlbum = false
+    @State private var editingAlbum: PHAssetCollection?
+    @State private var showingEditAlbum = false
+    @State private var isLoading = false
+    @State private var showSwipeView = false
+    @State private var selectedAlbumInfo: AlbumInfo?
     
     var body: some View {
         NavigationView {
@@ -19,116 +24,252 @@ struct AlbumsView: View {
                 Color.black.ignoresSafeArea()
                 
                 VStack(spacing: 0) {
-                    // 顶部导航栏
-                    navigationHeader
+                    // 顶部区域
+                    headerSection
                     
-                    // 搜索栏
-                    searchBar
-                    
-                    // 相册列表
-                    albumsList
+                    if dataManager.photoLibraryManager.authorizationStatus != .authorized {
+                        // 权限授权区域
+                        authorizationSection
+                    } else {
+                        // 相册列表
+                        albumsList
+                    }
                 }
             }
         }
         .navigationBarHidden(true)
-        .sheet(isPresented: $showingAddAlbum) {
-            AddAlbumView()
+        .sheet(isPresented: $showingCreateAlbum) {
+            CreateAlbumView()
                 .environmentObject(dataManager)
+                .onDisappear {
+                    dataManager.loadAlbums()
+                }
         }
-        .sheet(item: $editingAlbum) { album in
-            EditAlbumView(album: album)
-                .environmentObject(dataManager)
+        .sheet(isPresented: $showingEditAlbum) {
+            if let album = editingAlbum {
+                EditAlbumView(album: album)
+                    .environmentObject(dataManager)
+                    .onDisappear {
+                        dataManager.loadAlbums()
+                    }
+            }
+        }
+        .sheet(isPresented: $showSwipeView) {
+            if let albumInfo = selectedAlbumInfo {
+                SwipePhotoView(selectedCategory: nil, selectedTimeGroup: nil, selectedAlbumInfo: albumInfo)
+                    .environmentObject(dataManager)
+            }
+        }
+        .onAppear {
+            dataManager.loadAlbums()
         }
     }
     
-    // MARK: - 导航栏
-    private var navigationHeader: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("相册")
+    // MARK: - 顶部区域
+    private var headerSection: some View {
+        VStack(spacing: 20) {
+            // 标题
+            VStack(spacing: 8) {
+                Text("相册管理")
                     .font(.system(size: 28, weight: .bold))
                     .foregroundColor(.white)
                 
-                Text("管理你的相册")
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundColor(.gray)
-            }
-            
-            Spacer()
-            
-            Button(action: { showingAddAlbum = true }) {
-                ZStack {
-                    Circle()
-                        .fill(Color.gray.opacity(0.8))
-                        .frame(width: 40, height: 40)
-                    
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundColor(.white)
+                if dataManager.photoLibraryManager.authorizationStatus == .authorized {
+                    Text("管理您的照片相册")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundColor(.gray)
+                } else {
+                    Text("需要访问照片库权限")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundColor(.orange)
                 }
             }
+            .padding(.top, 20)
+            
+            // 搜索栏和创建按钮（仅在已授权时显示）
+            if dataManager.photoLibraryManager.authorizationStatus == .authorized {
+                HStack(spacing: 12) {
+                    // 搜索栏
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.gray)
+                        
+                        TextField("搜索相册", text: $searchText)
+                            .font(.system(size: 16, weight: .regular))
+                            .foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.gray.opacity(0.1))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                            )
+                    )
+                    
+                    // 创建相册按钮
+                    Button(action: {
+                        showingCreateAlbum = true
+                    }) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Color.blue)
+                            .cornerRadius(8)
+                    }
+                }
+                .padding(.horizontal, 24)
+            }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
-        .background(Color.black)
-        .overlay(
-            Rectangle()
-                .fill(Color.gray.opacity(0.3))
-                .frame(height: 1),
-            alignment: .bottom
-        )
+        .padding(.bottom, 20)
     }
     
-    // MARK: - 搜索栏
-    private var searchBar: some View {
-        HStack {
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(.gray)
+    // MARK: - 权限授权区域
+    private var authorizationSection: some View {
+        VStack {
+            Spacer()
+            
+            VStack(spacing: 20) {
+                Image(systemName: "photo.stack")
+                    .font(.system(size: 60, weight: .medium))
+                    .foregroundColor(.blue)
                 
-                TextField("搜索相册...", text: $searchText)
-                    .font(.system(size: 16, weight: .regular))
+                Text("需要访问照片库")
+                    .font(.system(size: 24, weight: .bold))
                     .foregroundColor(.white)
-                    .accentColor(.white)
+                
+                Text("需要访问您的照片库来管理相册。我们不会上传或分享您的照片。")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(nil)
+                
+                Button(action: {
+                    dataManager.requestPhotoLibraryAccess()
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "key.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                        
+                        Text("授权访问照片库")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(Color.blue)
+                    .cornerRadius(12)
+                }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Color.gray.opacity(0.9))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20)
-                            .stroke(Color.gray.opacity(0.7), lineWidth: 1)
-                    )
-            )
+            .padding(.horizontal, 32)
+            
+            Spacer()
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
-        .background(
-            Color.black.opacity(0.9)
-                .blur(radius: 10)
-        )
     }
     
     // MARK: - 相册列表
     private var albumsList: some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("我的相册")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.top, 12)
+            LazyVStack(spacing: 16) {
+                if isLoading {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.2)
+                        
+                        Text("加载相册中...")
+                            .font(.system(size: 16, weight: .regular))
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.top, 40)
+                } else {
+                    // 系统相册
+                    if !filteredSystemAlbums.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("系统相册 (\(filteredSystemAlbums.count)个)")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 24)
+                                .padding(.top, 12)
+                            
+                            ForEach(filteredSystemAlbums) { albumInfo in
+                                AlbumInfoRow(
+                                    albumInfo: albumInfo,
+                                    photoLibraryManager: dataManager.photoLibraryManager,
+                                    onTap: {
+                                        selectedAlbumInfo = albumInfo
+                                        showSwipeView = true
+                                    },
+                                    onEdit: {
+                                        if let collection = albumInfo.assetCollection {
+                                            editingAlbum = collection
+                                            showingEditAlbum = true
+                                        }
+                                    },
+                                    onDelete: {
+                                        if let collection = albumInfo.assetCollection {
+                                            deleteAlbum(collection)
+                                        }
+                                    }
+                                )
+                                .padding(.horizontal, 24)
+                            }
+                        }
+                    }
                     
-                    ForEach(filteredAlbums) { album in
-                        AlbumRow(
-                            album: album,
-                            onEdit: { editingAlbum = album },
-                            onDelete: { deleteAlbum(album) }
-                        )
-                        .padding(.horizontal, 24)
+                    // 用户创建的相册
+                    if !filteredUserAlbums.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("我的相册 (\(filteredUserAlbums.count)个)")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 24)
+                                .padding(.top, 12)
+                            
+                            ForEach(filteredUserAlbums) { albumInfo in
+                                AlbumInfoRow(
+                                    albumInfo: albumInfo,
+                                    photoLibraryManager: dataManager.photoLibraryManager,
+                                    onTap: {
+                                        selectedAlbumInfo = albumInfo
+                                        showSwipeView = true
+                                    },
+                                    onEdit: {
+                                        if let collection = albumInfo.assetCollection {
+                                            editingAlbum = collection
+                                            showingEditAlbum = true
+                                        }
+                                    },
+                                    onDelete: {
+                                        if let collection = albumInfo.assetCollection {
+                                            deleteAlbum(collection)
+                                        }
+                                    }
+                                )
+                                .padding(.horizontal, 24)
+                            }
+                        }
+                    }
+                    
+                    if filteredSystemAlbums.isEmpty && filteredUserAlbums.isEmpty {
+                        VStack(spacing: 20) {
+                            Image(systemName: "photo.stack")
+                                .font(.system(size: 60, weight: .medium))
+                                .foregroundColor(.gray)
+                            
+                            Text("没有找到相册")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundColor(.white)
+                            
+                            Text("尝试创建一个新相册或检查搜索条件")
+                                .font(.system(size: 14, weight: .regular))
+                                .foregroundColor(.gray)
+                        }
+                        .padding(.top, 60)
                     }
                 }
                 
@@ -140,209 +281,240 @@ struct AlbumsView: View {
     }
     
     // MARK: - 计算属性
-    private var filteredAlbums: [Album] {
+    private var filteredSystemAlbums: [AlbumInfo] {
+        let albums = dataManager.getSystemAlbums()
         if searchText.isEmpty {
-            return dataManager.albums
+            return albums
         } else {
-            return dataManager.albums.filter { album in
-                album.name.localizedCaseInsensitiveContains(searchText)
+            return albums.filter { albumInfo in
+                albumInfo.title.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+    }
+    
+    private var filteredUserAlbums: [AlbumInfo] {
+        let albums = dataManager.getUserAlbums()
+        if searchText.isEmpty {
+            return albums
+        } else {
+            return albums.filter { albumInfo in
+                albumInfo.title.localizedCaseInsensitiveContains(searchText)
             }
         }
     }
     
     // MARK: - 方法
-    private func deleteAlbum(_ album: Album) {
-        guard let index = dataManager.albums.firstIndex(where: { $0.id == album.id }) else { return }
-        dataManager.deleteAlbum(at: IndexSet(integer: index))
-    }
-}
-
-// MARK: - 相册行
-struct AlbumRow: View {
-    let album: Album
-    let onEdit: () -> Void
-    let onDelete: () -> Void
     
-    @State private var dragOffset: CGSize = .zero
-    @State private var showingActionButtons = false
-    
-    var body: some View {
-        ZStack {
-            // 背景操作按钮
-            HStack {
-                // 编辑按钮
-                Button(action: onEdit) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.blue)
-                            .frame(width: 60, height: 60)
-                        
-                        Image(systemName: "pencil")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.white)
-                    }
-                }
-                
-                Spacer()
-                
-                // 删除按钮
-                Button(action: onDelete) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.red)
-                            .frame(width: 60, height: 60)
-                        
-                        Image(systemName: "trash")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.white)
-                    }
+    private func deleteAlbum(_ album: PHAssetCollection) {
+        // 只有用户创建的相册可以删除（非系统相册）
+        guard album.assetCollectionType == .album else { return }
+        
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetCollectionChangeRequest.deleteAssetCollections([album] as NSArray)
+        }) { success, error in
+            DispatchQueue.main.async {
+                if success {
+                    self.dataManager.loadAlbums()
+                } else if let error = error {
+                    print("删除相册失败: \(error.localizedDescription)")
                 }
             }
-            .opacity(abs(dragOffset.width) > 20 ? 1 : 0)
-            .animation(.easeInOut(duration: 0.2), value: dragOffset)
-            
-            // 主要内容
-            HStack(spacing: 12) {
-                // 拖拽手柄
-                Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.gray)
-                    .frame(width: 20)
-                
-                // 相册缩略图
-                if let coverPhoto = album.coverPhoto {
-                    PhotoThumbnailView(photo: coverPhoto)
-                } else {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(album.color.opacity(0.8))
-                            .frame(width: 40, height: 40)
-                        
-                        Image(systemName: album.icon)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white)
-                    }
-                }
-                
-                // 相册信息
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 8) {
-                        Image(systemName: album.icon)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(album.color)
-                        
-                        Text(album.name)
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.white)
-                    }
-                    
-                    Text("\(album.photoCount)张照片")
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundColor(.gray)
-                }
-                
-                Spacer()
-                
-                // 操作按钮
-                HStack(spacing: 16) {
-                    Button(action: onEdit) {
-                        Image(systemName: "pencil")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.gray)
-                    }
-                    
-                    Button(action: {
-                        withAnimation {
-                            onDelete()
-                        }
-                    }) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.red.opacity(0.8))
-                    }
-                }
-            }
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.gray.opacity(0.1))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-                    )
-            )
-            .offset(dragOffset)
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        dragOffset = value.translation
-                    }
-                    .onEnded { value in
-                                        if abs(value.translation.width) > 100 {
-                    if value.translation.width > 0 {
-                        onEdit()
-                    } else {
-                        onDelete()
-                    }
-                }
-                        
-                        withAnimation(.spring()) {
-                            dragOffset = .zero
-                        }
-                    }
-            )
         }
     }
 }
 
-// MARK: - 添加相册视图
-struct AddAlbumView: View {
+// MARK: - 相册信息行
+struct AlbumInfoRow: View {
+    let albumInfo: AlbumInfo
+    let photoLibraryManager: PhotoLibraryManager
+    let onTap: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+    
+    @State private var dragOffset: CGSize = .zero
+    @State private var thumbnailImage: UIImage?
+    
+    var body: some View {
+        Button(action: onTap) {
+            ZStack {
+                // 背景操作按钮
+                HStack {
+                    // 编辑按钮
+                    Button(action: onEdit) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.blue)
+                                .frame(width: 60, height: 60)
+                            
+                            Image(systemName: "pencil")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.white)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    // 删除按钮（只有用户创建的相册可以删除）
+                    if albumInfo.type == .userCreated {
+                        Button(action: onDelete) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.red)
+                                    .frame(width: 60, height: 60)
+                                
+                                Image(systemName: "trash")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(.white)
+                            }
+                        }
+                    }
+                }
+                .opacity(abs(dragOffset.width) > 20 ? 1 : 0)
+                .animation(.easeInOut(duration: 0.2), value: dragOffset)
+                
+                // 主要内容
+                HStack(spacing: 16) {
+                    // 相册缩略图
+                    Group {
+                        if let image = thumbnailImage {
+                            Image(uiImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 60, height: 60)
+                                .clipped()
+                                .cornerRadius(8)
+                        } else {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(albumInfo.type.color.opacity(0.3))
+                                    .frame(width: 60, height: 60)
+                                
+                                Image(systemName: albumInfo.type.icon)
+                                    .font(.system(size: 20, weight: .medium))
+                                    .foregroundColor(albumInfo.type.color)
+                            }
+                        }
+                    }
+                    
+                    // 相册信息
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(albumInfo.title)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                        
+                        Text("\(albumInfo.photosCount) 张照片")
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundColor(.gray)
+                    }
+                    
+                    Spacer()
+                    
+                    // 操作按钮
+                    HStack(spacing: 16) {
+                        if albumInfo.type == .userCreated {
+                            Button(action: { 
+                                onEdit()
+                            }) {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.gray)
+                            }
+                            .onTapGesture {
+                                // 防止触发父视图的点击事件
+                            }
+                            
+                            Button(action: {
+                                withAnimation {
+                                    onDelete()
+                                }
+                            }) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.red.opacity(0.8))
+                            }
+                            .onTapGesture {
+                                // 防止触发父视图的点击事件
+                            }
+                        }
+                        
+                        // 进入整理页面箭头
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.gray.opacity(0.6))
+                    }
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.gray.opacity(0.1))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                        )
+                )
+                .offset(dragOffset)
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            dragOffset = value.translation
+                        }
+                        .onEnded { value in
+                            if abs(value.translation.width) > 100 {
+                                if value.translation.width > 0 {
+                                    onEdit()
+                                } else if albumInfo.type == .userCreated {
+                                    onDelete()
+                                }
+                            }
+                            
+                            withAnimation(.spring()) {
+                                dragOffset = .zero
+                            }
+                        }
+                )
+            }
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onAppear {
+            loadAlbumThumbnail()
+        }
+    }
+    
+    private func loadAlbumThumbnail() {
+        // 加载缩略图
+        if let thumbnailAsset = albumInfo.thumbnailAsset {
+            photoLibraryManager.loadThumbnail(for: thumbnailAsset) { image in
+                self.thumbnailImage = image
+            }
+        }
+    }
+}
+
+// MARK: - 创建相册视图
+struct CreateAlbumView: View {
     @EnvironmentObject var dataManager: DataManager
     @Environment(\.dismiss) private var dismiss
-    
     @State private var albumName = ""
-    @State private var selectedIcon = "folder.fill"
-    @State private var selectedColor = Color.blue
-    
-    private let availableIcons = [
-        "folder.fill", "heart.fill", "star.fill", "tag.fill",
-        "person.2.fill", "airplane", "car.fill", "house.fill",
-        "briefcase.fill", "gamecontroller.fill", "music.note",
-        "camera.fill", "book.fill", "paintbrush.fill"
-    ]
-    
-    private let availableColors: [Color] = [
-        .red, .orange, .yellow, .green, .mint, .teal,
-        .cyan, .blue, .indigo, .purple, .pink, .brown
-    ]
+    @State private var isCreating = false
     
     var body: some View {
         NavigationView {
             ZStack {
                 Color.black.ignoresSafeArea()
                 
-                VStack(spacing: 24) {
-                    // 预览
+                VStack(spacing: 32) {
                     VStack(spacing: 16) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 20)
-                                .fill(selectedColor)
-                                .frame(width: 80, height: 80)
-                            
-                            Image(systemName: selectedIcon)
-                                .font(.system(size: 32, weight: .medium))
-                                .foregroundColor(.white)
-                        }
+                        Image(systemName: "plus.rectangle.on.folder")
+                            .font(.system(size: 60, weight: .medium))
+                            .foregroundColor(.blue)
                         
-                        Text(albumName.isEmpty ? "新相册" : albumName)
-                            .font(.system(size: 20, weight: .semibold))
+                        Text("创建新相册")
+                            .font(.system(size: 24, weight: .bold))
                             .foregroundColor(.white)
                     }
-                    .padding(.top, 40)
                     
-                    // 表单
-                    VStack(spacing: 20) {
-                        // 相册名称
+                    VStack(spacing: 16) {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("相册名称")
                                 .font(.system(size: 16, weight: .semibold))
@@ -351,125 +523,225 @@ struct AddAlbumView: View {
                             TextField("输入相册名称", text: $albumName)
                                 .font(.system(size: 16, weight: .regular))
                                 .foregroundColor(.white)
-                                .accentColor(.white)
-                                .padding()
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 12)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color.gray.opacity(0.2))
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.gray.opacity(0.1))
                                         .overlay(
-                                            RoundedRectangle(cornerRadius: 12)
+                                            RoundedRectangle(cornerRadius: 8)
                                                 .stroke(Color.gray.opacity(0.3), lineWidth: 1)
                                         )
                                 )
                         }
                         
-                        // 图标选择
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("选择图标")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.white)
-                            
-                            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 12) {
-                                ForEach(availableIcons, id: \.self) { icon in
-                                    Button(action: { selectedIcon = icon }) {
-                                        ZStack {
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .fill(selectedIcon == icon ? selectedColor : Color.gray.opacity(0.3))
-                                                .frame(width: 40, height: 40)
-                                            
-                                            Image(systemName: icon)
-                                                .font(.system(size: 16, weight: .medium))
-                                                .foregroundColor(.white)
-                                        }
-                                    }
+                        Text("简洁的相册名称，如\"旅行\"、\"家庭\"等")
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.leading)
+                    }
+                    
+                    VStack(spacing: 12) {
+                        Button(action: createAlbum) {
+                            HStack(spacing: 8) {
+                                if isCreating {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        .scaleEffect(0.8)
+                                } else {
+                                    Image(systemName: "plus")
+                                        .font(.system(size: 16, weight: .semibold))
                                 }
+                                
+                                Text(isCreating ? "创建中..." : "创建相册")
+                                    .font(.system(size: 16, weight: .semibold))
                             }
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(albumName.isEmpty ? Color.gray : Color.blue)
+                            .cornerRadius(12)
                         }
+                        .disabled(albumName.isEmpty || isCreating)
                         
-                        // 颜色选择
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("选择颜色")
+                        Button(action: { dismiss() }) {
+                            Text("取消")
                                 .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.white)
-                            
-                            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
-                                ForEach(Array(availableColors.enumerated()), id: \.offset) { index, color in
-                                    Button(action: { selectedColor = color }) {
-                                        ZStack {
-                                            Circle()
-                                                .fill(color)
-                                                .frame(width: 40, height: 40)
-                                            
-                                            if selectedColor == color {
-                                                Image(systemName: "checkmark")
-                                                    .font(.system(size: 16, weight: .bold))
-                                                    .foregroundColor(.white)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                                .foregroundColor(.gray)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(Color.clear)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(Color.gray.opacity(0.5), lineWidth: 1)
+                                )
                         }
                     }
-                    .padding(.horizontal, 24)
                     
                     Spacer()
                 }
+                .padding(.horizontal, 32)
+                .padding(.top, 40)
             }
-            .navigationTitle("新建相册")
+            .navigationTitle("创建相册")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button("取消") {
                         dismiss()
                     }
-                    .foregroundColor(.white)
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("完成") {
-                        if !albumName.isEmpty {
-                            dataManager.addAlbum(
-                                name: albumName,
-                                icon: selectedIcon,
-                                color: selectedColor
-                            )
-                            dismiss()
-                        }
-                    }
-                    .foregroundColor(albumName.isEmpty ? .gray : .blue)
-                    .disabled(albumName.isEmpty)
+                    .foregroundColor(.gray)
                 }
             }
         }
         .preferredColorScheme(.dark)
     }
+    
+    private func createAlbum() {
+        guard !albumName.isEmpty else { return }
+        
+        isCreating = true
+        
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: albumName)
+        }) { success, error in
+            DispatchQueue.main.async {
+                self.isCreating = false
+                if success {
+                    self.dismiss()
+                } else if let error = error {
+                    print("创建相册失败: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
 }
 
 // MARK: - 编辑相册视图
 struct EditAlbumView: View {
+    let album: PHAssetCollection
     @EnvironmentObject var dataManager: DataManager
     @Environment(\.dismiss) private var dismiss
+    @State private var newName: String
+    @State private var isUpdating = false
     
-    let album: Album
-    @State private var albumName: String
-    @State private var selectedIcon: String
-    @State private var selectedColor: Color
-    
-    init(album: Album) {
+    init(album: PHAssetCollection) {
         self.album = album
-        self._albumName = State(initialValue: album.name)
-        self._selectedIcon = State(initialValue: album.icon)
-        self._selectedColor = State(initialValue: album.color)
+        self._newName = State(initialValue: album.localizedTitle ?? "")
     }
     
     var body: some View {
-        // 编辑相册的实现与添加相册类似，这里简化处理
-        Text("编辑相册功能")
-            .foregroundColor(.white)
-            .onAppear {
-                dismiss()
+        NavigationView {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                
+                VStack(spacing: 32) {
+                    VStack(spacing: 16) {
+                        Image(systemName: "pencil.circle")
+                            .font(.system(size: 60, weight: .medium))
+                            .foregroundColor(.blue)
+                        
+                        Text("编辑相册")
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundColor(.white)
+                    }
+                    
+                    VStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("相册名称")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                            
+                            TextField("输入相册名称", text: $newName)
+                                .font(.system(size: 16, weight: .regular))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.gray.opacity(0.1))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                                        )
+                                )
+                        }
+                    }
+                    
+                    VStack(spacing: 12) {
+                        Button(action: updateAlbum) {
+                            HStack(spacing: 8) {
+                                if isUpdating {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        .scaleEffect(0.8)
+                                } else {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 16, weight: .semibold))
+                                }
+                                
+                                Text(isUpdating ? "更新中..." : "保存更改")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(newName.isEmpty ? Color.gray : Color.blue)
+                            .cornerRadius(12)
+                        }
+                        .disabled(newName.isEmpty || isUpdating)
+                        
+                        Button(action: { dismiss() }) {
+                            Text("取消")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.gray)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(Color.clear)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(Color.gray.opacity(0.5), lineWidth: 1)
+                                )
+                        }
+                    }
+                    
+                    Spacer()
+                }
+                .padding(.horizontal, 32)
+                .padding(.top, 40)
             }
+            .navigationTitle("编辑相册")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("取消") {
+                        dismiss()
+                    }
+                    .foregroundColor(.gray)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+    
+    private func updateAlbum() {
+        guard !newName.isEmpty, album.assetCollectionType == .album else { return }
+        
+        isUpdating = true
+        
+        PHPhotoLibrary.shared().performChanges({
+            let request = PHAssetCollectionChangeRequest(for: album)
+            request?.title = newName
+        }) { success, error in
+            DispatchQueue.main.async {
+                self.isUpdating = false
+                if success {
+                    self.dismiss()
+                } else if let error = error {
+                    print("更新相册失败: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 }
 

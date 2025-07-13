@@ -82,7 +82,7 @@ struct SettingsView: View {
                 )
                 
                 StatCard(
-                    value: "\(dataManager.getPhotoCount(for: .videos))",
+                    value: "\(dataManager.getVideosCount())",
                     label: "视频",
                     color: .purple
                 )
@@ -282,7 +282,7 @@ struct MailComposeView: UIViewControllerRepresentable {
         let composer = MFMailComposeViewController()
         composer.mailComposeDelegate = context.coordinator
         composer.setSubject("PhotoDel App 反馈")
-        composer.setToRecipients(["feedback@photodel.app"])
+        composer.setToRecipients(["jackie.xiao@outlook.com"])
         
         let body = """
         请在此处写下您的反馈和建议：
@@ -333,7 +333,7 @@ struct AboutView: View {
                             .fill(Color.white)
                             .frame(width: 120, height: 120)
                         
-                        Image(systemName: "camera.retro")
+                        Image(systemName: "camera")
                             .font(.system(size: 48, weight: .medium))
                             .foregroundColor(.black)
                     }

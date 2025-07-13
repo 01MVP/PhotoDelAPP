@@ -13,50 +13,39 @@ struct SwipePhotoView: View {
     @Environment(\.dismiss) private var dismiss
     
     let selectedCategory: PhotoCategory?
-    let selectedTimeGroup: TimeGroup?
+    let selectedTimeGroup: String?
+    let selectedAlbumInfo: AlbumInfo?
     
     @State private var dragOffset = CGSize.zero
     @State private var rotationAngle: Double = 0
     @State private var showDeleteConfirm = false
     @State private var swipeDirection: SwipeDirection?
     @State private var showPhotoAccessAlert = false
+    @State private var showBatchConfirm = false
     
     enum SwipeDirection {
         case left, right, up, down
     }
     
-    private var currentPhoto: Photo? {
-        return dataManager.useRealPhotos ? nil : dataManager.getCurrentPhoto()
-    }
-    
     private var currentRealPhoto: PHAsset? {
-        return dataManager.useRealPhotos ? dataManager.getCurrentRealPhoto() : nil
-    }
-    
-    private var filteredPhotos: [Photo] {
-        if dataManager.useRealPhotos { return [] }
-        
-        if let category = selectedCategory {
-            return dataManager.getPhotos(for: category)
-        } else if let timeGroup = selectedTimeGroup {
-            return dataManager.getPhotos(for: timeGroup)
-        } else {
-            return dataManager.photos
-        }
+        return dataManager.getCurrentRealPhoto()
     }
     
     private var filteredRealPhotos: [PHAsset] {
-        guard dataManager.useRealPhotos else { return [] }
-        
-        if let category = selectedCategory {
+        if let albumInfo = selectedAlbumInfo {
+            return dataManager.getPhotosForAlbum(albumInfo)
+        } else if let category = selectedCategory {
             return dataManager.getRealPhotos(for: category)
+        } else if let timeGroupString = selectedTimeGroup,
+                  let timeGroup = TimeGroup.allCases.first(where: { $0.rawValue == timeGroupString }) {
+            return dataManager.getPhotosForTimeGroup(timeGroup)
         } else {
             return dataManager.photoLibraryManager.allPhotos
         }
     }
     
     private var totalPhotosCount: Int {
-        return dataManager.useRealPhotos ? filteredRealPhotos.count : filteredPhotos.count
+        return filteredRealPhotos.count
     }
     
     var body: some View {
@@ -77,9 +66,15 @@ struct SwipePhotoView: View {
             }
         }
         .navigationBarHidden(true)
-        .sheet(isPresented: $showDeleteConfirm) {
-            DeleteConfirmView()
+        .sheet(isPresented: $showBatchConfirm) {
+            BatchConfirmView()
                 .environmentObject(dataManager)
+        }
+        .onDisappear {
+            // 离开页面时检查是否有待处理的操作
+            if !dataManager.deleteCandidates.isEmpty || !dataManager.favoriteCandidates.isEmpty {
+                showBatchConfirm = true
+            }
         }
     }
     
@@ -87,7 +82,7 @@ struct SwipePhotoView: View {
     private var navigationHeader: some View {
         HStack {
             // 返回按钮
-            Button(action: { dismiss() }) {
+            Button(action: handleBackAction) {
                 ZStack {
                     Circle()
                         .fill(Color.gray.opacity(0.8))
@@ -107,20 +102,20 @@ struct SwipePhotoView: View {
                     .font(.system(size: 18, weight: .bold))
                     .foregroundColor(.white)
                 
-                Text("\(selectedCategory?.rawValue ?? selectedTimeGroup?.rawValue ?? "全部相册") · \(totalPhotosCount) 张照片")
+                Text("\(getDisplayTitle()) · \(totalPhotosCount) 张照片")
                     .font(.system(size: 14, weight: .regular))
                     .foregroundColor(.gray)
             }
             
             Spacer()
             
-            // 已删除统计
+            // 候选库统计
             VStack(alignment: .trailing, spacing: 2) {
-                Text("已删除")
+                Text("待删除")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.white)
                 
-                Text("\(dataManager.organizeStats.deletedPhotos)")
+                Text("\(dataManager.deleteCandidates.count)")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundColor(.red)
             }
@@ -142,39 +137,7 @@ struct SwipePhotoView: View {
             VStack {
                 Spacer()
                 
-                if let photo = currentPhoto {
-                    // 虚拟照片显示
-                    ZStack {
-                        PhotoCard(photo: photo)
-                            .frame(width: geometry.size.width - 48, height: 450)
-                            .offset(dragOffset)
-                            .rotationEffect(.degrees(rotationAngle))
-                            .scaleEffect(1.0 - abs(dragOffset.width) / 1000)
-                            .gesture(createDragGesture())
-                            .animation(.spring(response: 0.5, dampingFraction: 0.8), value: dragOffset)
-                        
-                        if abs(dragOffset.width) > 50 {
-                            SwipeIndicator(direction: dragOffset.width < 0 ? .left : .right)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let realPhoto = currentRealPhoto {
-                    // 真实照片显示
-                    ZStack {
-                        RealPhotoCard(asset: realPhoto, photoLibraryManager: dataManager.photoLibraryManager)
-                            .frame(width: geometry.size.width - 48, height: 450)
-                            .offset(dragOffset)
-                            .rotationEffect(.degrees(rotationAngle))
-                            .scaleEffect(1.0 - abs(dragOffset.width) / 1000)
-                            .gesture(createDragGesture())
-                            .animation(.spring(response: 0.5, dampingFraction: 0.8), value: dragOffset)
-                        
-                        if abs(dragOffset.width) > 50 {
-                            SwipeIndicator(direction: dragOffset.width < 0 ? .left : .right)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if dataManager.useRealPhotos && dataManager.photoLibraryManager.authorizationStatus != .authorized {
+                if dataManager.photoLibraryManager.authorizationStatus != .authorized {
                     // 需要照片权限
                     VStack(spacing: 20) {
                         Image(systemName: "photo.on.rectangle.angled")
@@ -202,6 +165,27 @@ struct SwipePhotoView: View {
                                 .cornerRadius(8)
                         }
                     }
+                } else if let realPhoto = currentRealPhoto {
+                    // 真实照片显示
+                    ZStack {
+                        RealPhotoCard(
+                            asset: realPhoto, 
+                            photoLibraryManager: dataManager.photoLibraryManager,
+                            isInDeleteCandidates: dataManager.isInDeleteCandidates(realPhoto),
+                            isInFavoriteCandidates: dataManager.isInFavoriteCandidates(realPhoto)
+                        )
+                        .frame(width: geometry.size.width - 48, height: 450)
+                        .offset(dragOffset)
+                        .rotationEffect(.degrees(rotationAngle))
+                        .scaleEffect(1.0 - abs(dragOffset.width) / 1000)
+                        .gesture(createDragGesture())
+                        .animation(.spring(response: 0.5, dampingFraction: 0.8), value: dragOffset)
+                        
+                        if abs(dragOffset.width) > 50 {
+                            SwipeIndicator(direction: dragOffset.width < 0 ? .left : .right)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     // 没有更多照片
                     VStack(spacing: 20) {
@@ -213,12 +197,12 @@ struct SwipePhotoView: View {
                             .font(.system(size: 24, weight: .bold))
                             .foregroundColor(.white)
                         
-                        Text("所有照片都已处理完毕")
+                        Text("您已经整理完所有照片")
                             .font(.system(size: 16, weight: .regular))
                             .foregroundColor(.gray)
                         
-                        Button(action: { showDeleteConfirm = true }) {
-                            Text("查看整理结果")
+                        Button(action: { dismiss() }) {
+                            Text("返回主页")
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 24)
@@ -230,13 +214,13 @@ struct SwipePhotoView: View {
                 }
                 
                 // 操作提示
-                if currentPhoto != nil {
+                if currentRealPhoto != nil {
                     HStack(spacing: 24) {
                         HStack(spacing: 8) {
                             Image(systemName: "arrow.left")
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(.red)
-                            Text("左滑删除")
+                            Text("左滑加入删除候选")
                                 .font(.system(size: 14, weight: .regular))
                                 .foregroundColor(.gray)
                         }
@@ -248,7 +232,7 @@ struct SwipePhotoView: View {
                             Image(systemName: "arrow.right")
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(.green)
-                            Text("右滑保留")
+                            Text("右滑跳过")
                                 .font(.system(size: 14, weight: .regular))
                                 .foregroundColor(.gray)
                         }
@@ -264,16 +248,6 @@ struct SwipePhotoView: View {
     // MARK: - 底部控制区域
     private var bottomControls: some View {
         VStack(spacing: 16) {
-            // 相册选择器
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(dataManager.albums) { album in
-                        AlbumButton(album: album)
-                    }
-                }
-                .padding(.horizontal, 24)
-            }
-            
             // 功能按钮
             HStack(spacing: 0) {
                 Spacer()
@@ -285,6 +259,7 @@ struct SwipePhotoView: View {
                     color: .gray
                 ) {
                     dataManager.undoLastAction()
+                    resetCardPosition()
                 }
                 
                 Spacer()
@@ -295,60 +270,40 @@ struct SwipePhotoView: View {
                     title: "收藏",
                     color: .pink
                 ) {
-                    if dataManager.useRealPhotos {
-                        dataManager.favoriteCurrentRealPhoto()
-                    } else {
-                        dataManager.favoriteCurrentPhoto()
-                    }
+                    dataManager.handleUpSwipe()
                     resetCardPosition()
                 }
                 
                 Spacer()
                 
-                // 删除
+                // 删除候选
                 ActionButton(
                     icon: "trash",
-                    title: "删除",
+                    title: "删除候选",
                     color: .red
                 ) {
-                    if dataManager.useRealPhotos {
-                        dataManager.deleteCurrentRealPhoto()
-                    } else {
-                        dataManager.deleteCurrentPhoto()
-                    }
+                    dataManager.handleLeftSwipe()
                     resetCardPosition()
                 }
                 
                 Spacer()
                 
-                // 设置
+                // 跳过
                 ActionButton(
-                    icon: "gearshape",
-                    title: "设置",
-                    color: .gray
+                    icon: "arrow.right",
+                    title: "跳过",
+                    color: .blue
                 ) {
-                    // 打开设置
+                    dataManager.handleRightSwipe()
+                    resetCardPosition()
                 }
                 
                 Spacer()
             }
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.gray.opacity(0.1))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-                    )
-            )
             .padding(.horizontal, 24)
+            .padding(.bottom, 32)
         }
-        .padding(.bottom, 24)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.gray.opacity(0.05))
-                .ignoresSafeArea(edges: .bottom)
-        )
+        .background(Color.black)
     }
     
     // MARK: - 手势处理
@@ -356,7 +311,7 @@ struct SwipePhotoView: View {
         DragGesture()
             .onChanged { value in
                 dragOffset = value.translation
-                rotationAngle = Double(value.translation.width / 10)
+                rotationAngle = Double(value.translation.width / 20)
             }
             .onEnded { value in
                 handleSwipeGesture(translation: value.translation)
@@ -368,35 +323,19 @@ struct SwipePhotoView: View {
         
         if abs(translation.width) > threshold {
             if translation.width < 0 {
-                // 左滑删除
-                if dataManager.useRealPhotos {
-                    dataManager.deleteCurrentRealPhoto()
-                } else {
-                    dataManager.deleteCurrentPhoto()
-                }
+                // 左滑：添加到删除候选库
+                dataManager.handleLeftSwipe()
             } else {
-                // 右滑保留
-                if dataManager.useRealPhotos {
-                    dataManager.moveToNextRealPhoto()
-                } else {
-                    dataManager.keepCurrentPhoto()
-                }
+                // 右滑：跳过
+                dataManager.handleRightSwipe()
             }
         } else if abs(translation.height) > threshold {
             if translation.height < 0 {
-                // 上滑收藏
-                if dataManager.useRealPhotos {
-                    dataManager.favoriteCurrentRealPhoto()
-                } else {
-                    dataManager.favoriteCurrentPhoto()
-                }
+                // 上滑：收藏
+                dataManager.handleUpSwipe()
             } else {
-                // 下滑跳过
-                if dataManager.useRealPhotos {
-                    dataManager.skipCurrentRealPhoto()
-                } else {
-                    dataManager.skipCurrentPhoto()
-                }
+                // 下滑：跳过
+                dataManager.handleDownSwipe()
             }
         }
         
@@ -407,51 +346,25 @@ struct SwipePhotoView: View {
         dragOffset = .zero
         rotationAngle = 0
     }
-}
-
-// MARK: - 照片卡片
-struct PhotoCard: View {
-    let photo: Photo
     
-    var body: some View {
-        ZStack {
-            // 使用PhotoPlaceholderView显示照片
-            PhotoPlaceholderView(photo: photo, width: 350, height: 450)
-            
-            // 底部信息覆盖层
-            VStack {
-                Spacer()
-                
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(photo.formattedDate)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white)
-                        
-                        HStack(spacing: 8) {
-                            Text(photo.device)
-                                .font(.system(size: 12, weight: .regular))
-                                .foregroundColor(.white.opacity(0.8))
-                            
-                            if let location = photo.location {
-                                Text("· \(location)")
-                                    .font(.system(size: 12, weight: .regular))
-                                    .foregroundColor(.white.opacity(0.8))
-                            }
-                        }
-                    }
-                    
-                    Spacer()
-                }
-                .padding(16)
-                .background(
-                    LinearGradient(
-                        colors: [.clear, .black.opacity(0.7)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-            }
+    private func handleBackAction() {
+        // 如果有待处理的操作，显示确认对话框
+        if !dataManager.deleteCandidates.isEmpty || !dataManager.favoriteCandidates.isEmpty {
+            showBatchConfirm = true
+        } else {
+            dismiss()
+        }
+    }
+    
+    private func getDisplayTitle() -> String {
+        if let albumInfo = selectedAlbumInfo {
+            return albumInfo.title
+        } else if let category = selectedCategory {
+            return category.rawValue
+        } else if let timeGroup = selectedTimeGroup {
+            return timeGroup
+        } else {
+            return "全部照片"
         }
     }
 }
@@ -460,66 +373,141 @@ struct PhotoCard: View {
 struct RealPhotoCard: View {
     let asset: PHAsset
     let photoLibraryManager: PhotoLibraryManager
+    let isInDeleteCandidates: Bool
+    let isInFavoriteCandidates: Bool
+    
+    @State private var image: UIImage?
+    @State private var isLoading = true
     
     var body: some View {
         ZStack {
-            // 显示真实照片
-            RealPhotoView(
-                asset: asset, 
-                photoLibraryManager: photoLibraryManager, 
-                size: CGSize(width: 350, height: 450)
-            )
-            
-            // 底部信息覆盖层
-            VStack {
-                Spacer()
-                
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(formatDate(asset.creationDate))
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white)
-                        
-                        HStack(spacing: 8) {
-                            Text("真实照片")
-                                .font(.system(size: 12, weight: .regular))
-                                .foregroundColor(.white.opacity(0.8))
-                            
-                            if asset.mediaType == .video {
-                                Text("· 视频")
-                                    .font(.system(size: 12, weight: .regular))
-                                    .foregroundColor(.white.opacity(0.8))
-                            }
-                            
-                            if asset.isFavorite {
-                                Text("· 已收藏")
-                                    .font(.system(size: 12, weight: .regular))
-                                    .foregroundColor(.red.opacity(0.8))
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 350, height: 450)
+                    .clipped()
+                    .cornerRadius(16)
+                    .overlay(
+                        overlayContent,
+                        alignment: .topTrailing
+                    )
+                    .overlay(
+                        candidateOverlay,
+                        alignment: .center
+                    )
+            } else {
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.1, green: 0.1, blue: 0.15),
+                                Color(red: 0.15, green: 0.15, blue: 0.2)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 350, height: 450)
+                    .cornerRadius(16)
+                    .overlay(
+                        Group {
+                            if isLoading {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(1.2)
                             }
                         }
-                    }
-                    
-                    Spacer()
-                }
-                .padding(16)
-                .background(
-                    LinearGradient(
-                        colors: [.clear, .black.opacity(0.7)],
-                        startPoint: .top,
-                        endPoint: .bottom
                     )
-                )
             }
+        }
+        .onAppear {
+            loadImage()
+        }
+        .onChange(of: asset) { _, _ in
+            loadImage()
         }
     }
     
-    private func formatDate(_ date: Date?) -> String {
-        guard let date = date else { return "未知日期" }
+    @ViewBuilder
+    private var overlayContent: some View {
+        VStack(spacing: 8) {
+            if asset.mediaType == .video {
+                ZStack {
+                    Circle()
+                        .fill(Color.black.opacity(0.6))
+                        .frame(width: 30, height: 30)
+                    
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.white)
+                }
+            }
+            
+            if isScreenshot {
+                ZStack {
+                    Circle()
+                        .fill(Color.black.opacity(0.6))
+                        .frame(width: 30, height: 30)
+                    
+                    Image(systemName: "camera.viewfinder")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.white)
+                }
+            }
+        }
+        .padding(12)
+    }
+    
+    @ViewBuilder
+    private var candidateOverlay: some View {
+        if isInDeleteCandidates || isInFavoriteCandidates {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.black.opacity(0.7))
+                
+                VStack(spacing: 12) {
+                    Image(systemName: isInDeleteCandidates ? "trash.fill" : "heart.fill")
+                        .font(.system(size: 40, weight: .medium))
+                        .foregroundColor(isInDeleteCandidates ? .red : .pink)
+                    
+                    Text(isInDeleteCandidates ? "删除候选" : "收藏候选")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+            }
+            .frame(width: 350, height: 450)
+            .cornerRadius(16)
+        }
+    }
+    
+    private var isScreenshot: Bool {
+        if #available(iOS 9.0, *) {
+            return asset.mediaSubtypes.contains(.photoScreenshot)
+        }
         
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "yyyy年M月d日 HH:mm"
-        return formatter.string(from: date)
+        // 备用方法：通过尺寸判断
+        let screenScale = UIScreen.main.scale
+        let screenSize = UIScreen.main.bounds.size
+        let screenPixelSize = CGSize(
+            width: screenSize.width * screenScale,
+            height: screenSize.height * screenScale
+        )
+        
+        let assetSize = CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
+        
+        return abs(assetSize.width - screenPixelSize.width) < 10 &&
+               abs(assetSize.height - screenPixelSize.height) < 10
+    }
+    
+    private func loadImage() {
+        isLoading = true
+        image = nil
+        
+        photoLibraryManager.loadImage(for: asset, size: CGSize(width: 350, height: 450)) { loadedImage in
+            self.image = loadedImage
+            self.isLoading = false
+        }
     }
 }
 
@@ -529,11 +517,11 @@ struct SwipeIndicator: View {
     
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: direction == .left ? "trash" : "heart.fill")
+            Image(systemName: direction == .left ? "trash" : "arrow.right")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.white)
             
-            Text(direction == .left ? "删除" : "保留")
+            Text(direction == .left ? "删除候选" : "跳过")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.white)
         }
@@ -541,37 +529,13 @@ struct SwipeIndicator: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 20)
-                .fill(direction == .left ? Color.red.opacity(0.9) : Color.green.opacity(0.9))
+                .fill(direction == .left ? Color.red.opacity(0.9) : Color.blue.opacity(0.9))
         )
         .offset(x: direction == .left ? -100 : 100)
     }
 }
 
-// MARK: - 相册按钮
-struct AlbumButton: View {
-    let album: Album
-    
-    var body: some View {
-        VStack(spacing: 4) {
-            Text(album.name)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.gray.opacity(0.8))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.gray.opacity(0.5), lineWidth: 1)
-                )
-        )
-    }
-}
-
-// MARK: - 操作按钮
+// MARK: - 功能按钮
 struct ActionButton: View {
     let icon: String
     let title: String
@@ -581,20 +545,103 @@ struct ActionButton: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(color)
+                ZStack {
+                    Circle()
+                        .fill(color.opacity(0.8))
+                        .frame(width: 48, height: 48)
+                    
+                    Image(systemName: icon)
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(.white)
+                }
                 
                 Text(title)
-                    .font(.system(size: 10, weight: .regular))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.gray)
             }
         }
-        .frame(width: 60, height: 60)
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+// MARK: - 批量确认视图
+struct BatchConfirmView: View {
+    @EnvironmentObject var dataManager: DataManager
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            
+            VStack(spacing: 32) {
+                VStack(spacing: 16) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 60, weight: .medium))
+                        .foregroundColor(.green)
+                    
+                    Text("执行批量操作")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundColor(.white)
+                    
+                    VStack(spacing: 8) {
+                        if !dataManager.deleteCandidates.isEmpty {
+                            Text("删除 \(dataManager.deleteCandidates.count) 张照片")
+                                .font(.system(size: 16, weight: .regular))
+                                .foregroundColor(.red)
+                        }
+                        
+                        if !dataManager.favoriteCandidates.isEmpty {
+                            Text("收藏 \(dataManager.favoriteCandidates.count) 张照片")
+                                .font(.system(size: 16, weight: .regular))
+                                .foregroundColor(.pink)
+                        }
+                    }
+                }
+                
+                VStack(spacing: 12) {
+                    Button(action: executeBatchOperations) {
+                        Text("确认执行")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Color.green)
+                            .cornerRadius(12)
+                    }
+                    
+                    Button(action: cancelOperations) {
+                        Text("取消操作")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Color.red)
+                            .cornerRadius(12)
+                    }
+                }
+            }
+            .padding(.horizontal, 32)
+        }
+    }
+    
+    private func executeBatchOperations() {
+        dataManager.executeBatchOperations { success, error in
+            if success {
+                dismiss()
+            } else {
+                // 处理错误
+                print("批量操作失败: \(error?.localizedDescription ?? "未知错误")")
+            }
+        }
+    }
+    
+    private func cancelOperations() {
+        dataManager.cancelAllOperations()
+        dismiss()
     }
 }
 
 #Preview {
-    SwipePhotoView(selectedCategory: .all, selectedTimeGroup: nil)
+    SwipePhotoView(selectedCategory: PhotoCategory.all, selectedTimeGroup: nil, selectedAlbumInfo: nil)
         .environmentObject(DataManager())
 } 

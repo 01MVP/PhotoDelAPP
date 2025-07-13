@@ -19,28 +19,22 @@ struct DeleteConfirmView: View {
             VStack(spacing: 0) {
                 Spacer()
                 
-                // 主要内容
-                VStack(spacing: 32) {
-                    // 删除图标
-                    ZStack {
-                        Circle()
-                            .fill(Color.red)
-                            .frame(width: 80, height: 80)
-                        
-                        Image(systemName: "trash")
-                            .font(.system(size: 32, weight: .medium))
-                            .foregroundColor(.white)
-                    }
-                    .scaleEffect(showAnimation ? 1.0 : 0.8)
-                    .animation(.spring(response: 0.6, dampingFraction: 0.7), value: showAnimation)
+                VStack(spacing: 24) {
+                    // 标题图标
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 60, weight: .light))
+                        .foregroundColor(.green)
+                        .opacity(showAnimation ? 1.0 : 0.0)
+                        .scaleEffect(showAnimation ? 1.0 : 0.5)
+                        .animation(.spring(response: 0.8, dampingFraction: 0.6), value: showAnimation)
                     
-                    // 标题和描述
-                    VStack(spacing: 12) {
-                        Text("整理完成")
-                            .font(.system(size: 28, weight: .bold))
+                    // 标题文本
+                    VStack(spacing: 8) {
+                        Text("操作完成")
+                            .font(.system(size: 24, weight: .bold))
                             .foregroundColor(.white)
                         
-                        Text("以下是本次整理的统计信息")
+                        Text("照片整理完成")
                             .font(.system(size: 16, weight: .regular))
                             .foregroundColor(.gray)
                     }
@@ -87,15 +81,15 @@ struct DeleteConfirmView: View {
     private var statsGrid: some View {
         HStack(spacing: 16) {
             StatisticCard(
-                value: "\(dataManager.organizeStats.deletedPhotos)",
-                label: "已删除",
+                value: "\(dataManager.deleteCandidates.count)",
+                label: "待删除",
                 color: .red
             )
             
             StatisticCard(
-                value: "\(dataManager.organizeStats.keptPhotos)",
-                label: "已保留",
-                color: .green
+                value: "\(dataManager.favoriteCandidates.count)",
+                label: "已收藏",
+                color: .yellow
             )
         }
         .opacity(showAnimation ? 1.0 : 0.0)
@@ -112,8 +106,8 @@ struct DeleteConfirmView: View {
             )
             
             DetailRow(
-                label: "整理时间",
-                value: dataManager.organizeStats.formattedTimeSpent
+                label: "总照片数",
+                value: "\(dataManager.photoLibraryManager.allPhotos.count)"
             )
         }
         .padding(16)
@@ -133,29 +127,29 @@ struct DeleteConfirmView: View {
     // MARK: - 操作按钮
     private var actionButtons: some View {
         VStack(spacing: 12) {
-            // 确认删除按钮
-            Button(action: confirmDeletion) {
+            // 执行批量操作按钮
+            Button(action: performBatchOperations) {
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark")
                         .font(.system(size: 16, weight: .semibold))
                     
-                    Text("确认删除")
+                    Text("执行操作")
                         .font(.system(size: 16, weight: .semibold))
                 }
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
-                .background(Color.red)
+                .background(Color.blue)
                 .cornerRadius(12)
             }
             
-            // 取消删除按钮
-            Button(action: cancelDeletion) {
+            // 取消操作按钮
+            Button(action: cancelOperations) {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.uturn.backward")
                         .font(.system(size: 16, weight: .semibold))
                     
-                    Text("取消删除")
+                    Text("取消操作")
                         .font(.system(size: 16, weight: .semibold))
                 }
                 .foregroundColor(.white)
@@ -174,13 +168,13 @@ struct DeleteConfirmView: View {
     }
     
     // MARK: - 操作方法
-    private func confirmDeletion() {
-        dataManager.confirmDeletion()
+    private func performBatchOperations() {
+        dataManager.performBatchOperations()
         dismiss()
     }
     
-    private func cancelDeletion() {
-        dataManager.cancelDeletion()
+    private func cancelOperations() {
+        dataManager.clearCandidates()
         dismiss()
     }
 }
