@@ -22,13 +22,16 @@ struct SwipePhotoView: View {
     @State private var swipeDirection: SwipeDirection?
     @State private var showPhotoAccessAlert = false
     @State private var showBatchConfirm = false
+    @State private var currentPhotoIndex = 0
     
     enum SwipeDirection {
         case left, right, up, down
     }
     
     private var currentRealPhoto: PHAsset? {
-        return dataManager.getCurrentRealPhoto()
+        let photos = filteredRealPhotos
+        guard currentPhotoIndex < photos.count else { return nil }
+        return photos[currentPhotoIndex]
     }
     
     private var filteredRealPhotos: [PHAsset] {
@@ -46,6 +49,15 @@ struct SwipePhotoView: View {
     
     private var totalPhotosCount: Int {
         return filteredRealPhotos.count
+    }
+    
+    private var currentProgress: Int {
+        return min(currentPhotoIndex + 1, totalPhotosCount)
+    }
+    
+    // 是否在相册模式（不显示进度，因为相册内的照片已经整理过）
+    private var isAlbumMode: Bool {
+        return selectedAlbumInfo != nil
     }
     
     var body: some View {
@@ -71,10 +83,7 @@ struct SwipePhotoView: View {
                 .environmentObject(dataManager)
         }
         .onDisappear {
-            // 离开页面时检查是否有待处理的操作
-            if !dataManager.deleteCandidates.isEmpty || !dataManager.favoriteCandidates.isEmpty {
-                showBatchConfirm = true
-            }
+            // 页面消失时的清理工作（不自动弹出确认对话框，因为用户可能只是切换到其他页面）
         }
     }
     
@@ -98,13 +107,19 @@ struct SwipePhotoView: View {
             
             // 标题信息
             VStack(spacing: 2) {
-                Text("照片整理")
+                Text(isAlbumMode ? "相册整理" : "照片整理")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundColor(.white)
                 
-                Text("\(getDisplayTitle()) · \(totalPhotosCount) 张照片")
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundColor(.gray)
+                if isAlbumMode {
+                    Text("\(getDisplayTitle()) · \(totalPhotosCount) 张照片")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundColor(.gray)
+                } else {
+                    Text("\(getDisplayTitle()) · \(currentProgress)/\(totalPhotosCount)")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundColor(.gray)
+                }
             }
             
             Spacer()
@@ -187,28 +202,100 @@ struct SwipePhotoView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    // 没有更多照片
+                    // 没有更多照片 - 增强的调试信息
                     VStack(spacing: 20) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 60, weight: .medium))
-                            .foregroundColor(.green)
-                        
-                        Text("整理完成！")
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundColor(.white)
-                        
-                        Text("您已经整理完所有照片")
-                            .font(.system(size: 16, weight: .regular))
-                            .foregroundColor(.gray)
-                        
-                        Button(action: { dismiss() }) {
-                            Text("返回主页")
-                                .font(.system(size: 16, weight: .semibold))
+                        if totalPhotosCount == 0 {
+                            // 没有照片的情况
+                            Image(systemName: "photo.badge.plus")
+                                .font(.system(size: 60, weight: .medium))
+                                .foregroundColor(.blue)
+                            
+                            Text("没有找到照片")
+                                .font(.system(size: 24, weight: .bold))
                                 .foregroundColor(.white)
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 12)
-                                .background(Color.blue)
-                                .cornerRadius(8)
+                            
+                            VStack(spacing: 8) {
+                                Text("调试信息：")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(.white)
+                                
+                                Text("权限状态: \(dataManager.photoLibraryManager.authorizationStatus.rawValue)")
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundColor(.gray)
+                                
+                                Text("全部照片数量: \(dataManager.photoLibraryManager.allPhotos.count)")
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundColor(.gray)
+                                
+                                Text("过滤照片数量: \(filteredRealPhotos.count)")
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundColor(.gray)
+                                
+                                Text("当前索引: \(currentPhotoIndex)")
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundColor(.gray)
+                                
+                                if let category = selectedCategory {
+                                    Text("选择分类: \(category.rawValue)")
+                                        .font(.system(size: 14, weight: .regular))
+                                        .foregroundColor(.gray)
+                                }
+                                
+                                if let timeGroup = selectedTimeGroup {
+                                    Text("选择时间组: \(timeGroup)")
+                                        .font(.system(size: 14, weight: .regular))
+                                        .foregroundColor(.gray)
+                                }
+                                
+                                if let albumInfo = selectedAlbumInfo {
+                                    Text("选择相册: \(albumInfo.title)")
+                                        .font(.system(size: 14, weight: .regular))
+                                        .foregroundColor(.gray)
+                                }
+                                
+                                Text("请添加照片到模拟器：")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .padding(.top, 8)
+                                
+                                Text("设备 → 照片 → 添加照片...")
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundColor(.blue)
+                            }
+                            .multilineTextAlignment(.center)
+                            
+                            Button(action: { dismiss() }) {
+                                Text("返回主页")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 24)
+                                    .padding(.vertical, 12)
+                                    .background(Color.blue)
+                                    .cornerRadius(8)
+                            }
+                        } else {
+                            // 整理完成的情况
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 60, weight: .medium))
+                                .foregroundColor(.green)
+                            
+                            Text("整理完成！")
+                                .font(.system(size: 24, weight: .bold))
+                                .foregroundColor(.white)
+                            
+                            Text("您已经整理完所有照片")
+                                .font(.system(size: 16, weight: .regular))
+                                .foregroundColor(.gray)
+                            
+                            Button(action: { dismiss() }) {
+                                Text("返回主页")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 24)
+                                    .padding(.vertical, 12)
+                                    .background(Color.blue)
+                                    .cornerRadius(8)
+                            }
                         }
                     }
                 }
@@ -258,7 +345,7 @@ struct SwipePhotoView: View {
                     title: "撤销",
                     color: .gray
                 ) {
-                    dataManager.undoLastAction()
+                    handleUndoAction()
                     resetCardPosition()
                 }
                 
@@ -270,7 +357,7 @@ struct SwipePhotoView: View {
                     title: "收藏",
                     color: .pink
                 ) {
-                    dataManager.handleUpSwipe()
+                    handleFavoriteAction()
                     resetCardPosition()
                 }
                 
@@ -282,7 +369,7 @@ struct SwipePhotoView: View {
                     title: "删除候选",
                     color: .red
                 ) {
-                    dataManager.handleLeftSwipe()
+                    handleDeleteAction()
                     resetCardPosition()
                 }
                 
@@ -294,7 +381,7 @@ struct SwipePhotoView: View {
                     title: "跳过",
                     color: .blue
                 ) {
-                    dataManager.handleRightSwipe()
+                    handleSkipAction()
                     resetCardPosition()
                 }
                 
@@ -321,25 +408,62 @@ struct SwipePhotoView: View {
     private func handleSwipeGesture(translation: CGSize) {
         let threshold: CGFloat = 100
         
+        guard let asset = currentRealPhoto else { return }
+        
         if abs(translation.width) > threshold {
             if translation.width < 0 {
                 // 左滑：添加到删除候选库
-                dataManager.handleLeftSwipe()
+                dataManager.addToDeleteCandidates(asset)
+                moveToNextPhoto()
             } else {
                 // 右滑：跳过
-                dataManager.handleRightSwipe()
+                moveToNextPhoto()
             }
         } else if abs(translation.height) > threshold {
             if translation.height < 0 {
                 // 上滑：收藏
-                dataManager.handleUpSwipe()
+                dataManager.addToFavoriteCandidates(asset)
+                moveToNextPhoto()
             } else {
                 // 下滑：跳过
-                dataManager.handleDownSwipe()
+                moveToNextPhoto()
             }
         }
         
         resetCardPosition()
+    }
+    
+    private func moveToNextPhoto() {
+        if currentPhotoIndex < filteredRealPhotos.count - 1 {
+            currentPhotoIndex += 1
+        }
+    }
+    
+    private func moveToPreviousPhoto() {
+        if currentPhotoIndex > 0 {
+            currentPhotoIndex -= 1
+        }
+    }
+    
+    private func handleFavoriteAction() {
+        guard let asset = currentRealPhoto else { return }
+        dataManager.addToFavoriteCandidates(asset)
+        moveToNextPhoto()
+    }
+    
+    private func handleDeleteAction() {
+        guard let asset = currentRealPhoto else { return }
+        dataManager.addToDeleteCandidates(asset)
+        moveToNextPhoto()
+    }
+    
+    private func handleSkipAction() {
+        moveToNextPhoto()
+    }
+    
+    private func handleUndoAction() {
+        // 撤销操作：回到上一张照片
+        moveToPreviousPhoto()
     }
     
     private func resetCardPosition() {
