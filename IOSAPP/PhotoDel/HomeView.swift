@@ -12,6 +12,7 @@ struct HomeView: View {
     @State private var showSwipeView = false
     @State private var selectedCategory: PhotoCategory?
     @State private var selectedTimeGroup: String?
+    @State private var selectedAlbumInfo: AlbumInfo?
     
     var body: some View {
         NavigationView {
@@ -67,7 +68,16 @@ struct HomeView: View {
             } else if let timeGroup = selectedTimeGroup {
                 SwipePhotoView(selectedCategory: nil, selectedTimeGroup: timeGroup, selectedAlbumInfo: nil)
                     .environmentObject(dataManager)
+            } else if let albumInfo = selectedAlbumInfo {
+                SwipePhotoView(selectedCategory: nil, selectedTimeGroup: nil, selectedAlbumInfo: albumInfo)
+                    .environmentObject(dataManager)
             }
+        }
+        .onDisappear {
+            // 清理选择状态
+            selectedCategory = nil
+            selectedTimeGroup = nil
+            selectedAlbumInfo = nil
         }
     }
     
@@ -132,7 +142,8 @@ struct HomeView: View {
                 ForEach(PhotoCategory.allCases, id: \.rawValue) { category in
                     CategoryCard(
                         category: category,
-                        count: getPhotoCount(for: category)
+                        count: getPhotoCount(for: category),
+                        progress: getProgressFor(category: category)
                     ) {
                         selectedCategory = category
                         showSwipeView = true
@@ -184,13 +195,30 @@ struct HomeView: View {
     private func getPhotoCount(for timeGroup: TimeGroup) -> Int {
         return dataManager.getPhotosForTimeGroup(timeGroup).count
     }
+    
+    private func getProgressFor(category: PhotoCategory) -> Double {
+        let totalPhotos = getPhotoCount(for: category)
+        guard totalPhotos > 0 else { return 0.0 }
+        
+        let organizedCount = dataManager.getOrganizedCount(for: category)
+        return Double(organizedCount) / Double(totalPhotos)
+    }
 }
 
 // MARK: - 分类卡片
 struct CategoryCard: View {
     let category: PhotoCategory
     let count: Int
+    let progress: Double
     let onTap: () -> Void
+    
+    private var progressColor: Color {
+        if progress >= 0.9 { return .yellow } // 90%以上 - 黄色
+        else if progress >= 0.8 { return .green } // 80-90% - 绿色
+        else if progress >= 0.6 { return .blue } // 60-80% - 蓝色
+        else if progress >= 0.4 { return .cyan } // 40-60% - 青色
+        else { return .purple } // 40%以下 - 紫色
+    }
     
     var body: some View {
         Button(action: onTap) {
@@ -219,6 +247,19 @@ struct CategoryCard: View {
                     }
                     
                     Spacer()
+                    
+                    // 进度指示器
+                    ZStack {
+                        Circle()
+                            .stroke(Color.gray.opacity(0.3), lineWidth: 2)
+                            .frame(width: 24, height: 24)
+                        
+                        Circle()
+                            .trim(from: 0, to: progress)
+                            .stroke(progressColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .frame(width: 24, height: 24)
+                            .rotationEffect(.degrees(-90))
+                    }
                     
                     // 箭头
                     Image(systemName: "chevron.right")

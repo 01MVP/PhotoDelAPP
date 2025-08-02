@@ -210,6 +210,28 @@ class DataManager: ObservableObject {
         }
     }
     
+    func getOrganizedCount(for category: PhotoCategory) -> Int {
+        // 简单示例：假设已删除和已收藏的照片为已整理的照片
+        // 实际项目中可能需要从持久化存储中获取
+        let deletedCount = deleteCandidates.count
+        let favoritedCount = favoriteCandidates.count
+        return deletedCount + favoritedCount
+    }
+    
+    // MARK: - 收藏操作
+    func toggleFavoriteStatus(_ asset: PHAsset, shouldFavorite: Bool) {
+        PHPhotoLibrary.shared().performChanges({
+            let request = PHAssetChangeRequest(for: asset)
+            request.isFavorite = shouldFavorite
+        }) { success, error in
+            if let error = error {
+                print("Failed to toggle favorite status: \(error)")
+            } else {
+                print("Successfully \(shouldFavorite ? "favorited" : "unfavorited") photo")
+            }
+        }
+    }
+    
     // MARK: - 统一接口
     func getTotalPhotosCount() -> Int {
         return photoLibraryManager.totalPhotosCount

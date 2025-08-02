@@ -60,6 +60,11 @@ struct SwipePhotoView: View {
         return selectedAlbumInfo != nil
     }
     
+    private var isCurrentPhotoFavorited: Bool {
+        guard let asset = currentRealPhoto else { return false }
+        return asset.isFavorite
+    }
+    
     var body: some View {
         NavigationView {
             ZStack {
@@ -351,10 +356,10 @@ struct SwipePhotoView: View {
                 
                 Spacer()
                 
-                // 收藏
+                // 收藏 - 动态显示图标
                 ActionButton(
-                    icon: "heart.fill",
-                    title: "收藏",
+                    icon: isCurrentPhotoFavorited ? "heart.fill" : "heart",
+                    title: isCurrentPhotoFavorited ? "取消收藏" : "收藏",
                     color: .pink
                 ) {
                     handleFavoriteAction()
@@ -421,8 +426,9 @@ struct SwipePhotoView: View {
             }
         } else if abs(translation.height) > threshold {
             if translation.height < 0 {
-                // 上滑：收藏
-                dataManager.addToFavoriteCandidates(asset)
+                // 上滑：收藏/取消收藏
+                let isFavorited = asset.isFavorite
+                dataManager.toggleFavoriteStatus(asset, shouldFavorite: !isFavorited)
                 moveToNextPhoto()
             } else {
                 // 下滑：跳过
@@ -447,8 +453,12 @@ struct SwipePhotoView: View {
     
     private func handleFavoriteAction() {
         guard let asset = currentRealPhoto else { return }
-        dataManager.addToFavoriteCandidates(asset)
-        moveToNextPhoto()
+        
+        // 直接切换收藏状态，不添加到候选列表
+        let isFavorited = asset.isFavorite
+        dataManager.toggleFavoriteStatus(asset, shouldFavorite: !isFavorited)
+        
+        // 不自动移动到下一张照片，让用户可以看到状态变化
     }
     
     private func handleDeleteAction() {
@@ -472,8 +482,8 @@ struct SwipePhotoView: View {
     }
     
     private func handleBackAction() {
-        // 如果有待处理的操作，显示确认对话框
-        if !dataManager.deleteCandidates.isEmpty || !dataManager.favoriteCandidates.isEmpty {
+        // 如果有待处理的删除操作，显示确认对话框
+        if !dataManager.deleteCandidates.isEmpty {
             showBatchConfirm = true
         } else {
             dismiss()
@@ -712,12 +722,6 @@ struct BatchConfirmView: View {
                             Text("删除 \(dataManager.deleteCandidates.count) 张照片")
                                 .font(.system(size: 16, weight: .regular))
                                 .foregroundColor(.red)
-                        }
-                        
-                        if !dataManager.favoriteCandidates.isEmpty {
-                            Text("收藏 \(dataManager.favoriteCandidates.count) 张照片")
-                                .font(.system(size: 16, weight: .regular))
-                                .foregroundColor(.pink)
                         }
                     }
                 }
