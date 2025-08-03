@@ -7,15 +7,45 @@
 
 import SwiftUI
 
+enum SwipeViewDestination: Hashable {
+    case category(PhotoCategory)
+    case timeGroup(String)
+    case album(AlbumInfo)
+    
+    static func == (lhs: SwipeViewDestination, rhs: SwipeViewDestination) -> Bool {
+        switch (lhs, rhs) {
+        case (.category(let lhsCategory), .category(let rhsCategory)):
+            return lhsCategory == rhsCategory
+        case (.timeGroup(let lhsTimeGroup), .timeGroup(let rhsTimeGroup)):
+            return lhsTimeGroup == rhsTimeGroup
+        case (.album(let lhsAlbum), .album(let rhsAlbum)):
+            return lhsAlbum.id == rhsAlbum.id
+        default:
+            return false
+        }
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .category(let category):
+            hasher.combine("category")
+            hasher.combine(category)
+        case .timeGroup(let timeGroup):
+            hasher.combine("timeGroup")
+            hasher.combine(timeGroup)
+        case .album(let album):
+            hasher.combine("album")
+            hasher.combine(album.id)
+        }
+    }
+}
+
 struct HomeView: View {
     @EnvironmentObject var dataManager: DataManager
-    @State private var showSwipeView = false
-    @State private var selectedCategory: PhotoCategory?
-    @State private var selectedTimeGroup: String?
-    @State private var selectedAlbumInfo: AlbumInfo?
+    @State private var navigationPath = NavigationPath()
     
     var body: some View {
-        NavigationView {
+        NavigationStack(path: $navigationPath) {
             ZStack {
                 Color.black.ignoresSafeArea()
                 
@@ -59,25 +89,20 @@ struct HomeView: View {
                     .padding(.horizontal, 24)
                 }
             }
-        }
-        .navigationBarHidden(true)
-        .sheet(isPresented: $showSwipeView) {
-            if let category = selectedCategory {
-                SwipePhotoView(selectedCategory: category, selectedTimeGroup: nil, selectedAlbumInfo: nil)
-                    .environmentObject(dataManager)
-            } else if let timeGroup = selectedTimeGroup {
-                SwipePhotoView(selectedCategory: nil, selectedTimeGroup: timeGroup, selectedAlbumInfo: nil)
-                    .environmentObject(dataManager)
-            } else if let albumInfo = selectedAlbumInfo {
-                SwipePhotoView(selectedCategory: nil, selectedTimeGroup: nil, selectedAlbumInfo: albumInfo)
-                    .environmentObject(dataManager)
+            .navigationBarHidden(true)
+            .navigationDestination(for: SwipeViewDestination.self) { destination in
+                switch destination {
+                case .category(let category):
+                    SwipePhotoView(selectedCategory: category, selectedTimeGroup: nil, selectedAlbumInfo: nil)
+                        .environmentObject(dataManager)
+                case .timeGroup(let timeGroup):
+                    SwipePhotoView(selectedCategory: nil, selectedTimeGroup: timeGroup, selectedAlbumInfo: nil)
+                        .environmentObject(dataManager)
+                case .album(let albumInfo):
+                    SwipePhotoView(selectedCategory: nil, selectedTimeGroup: nil, selectedAlbumInfo: albumInfo)
+                        .environmentObject(dataManager)
+                }
             }
-        }
-        .onDisappear {
-            // 清理选择状态
-            selectedCategory = nil
-            selectedTimeGroup = nil
-            selectedAlbumInfo = nil
         }
     }
     
@@ -145,8 +170,7 @@ struct HomeView: View {
                         count: getPhotoCount(for: category),
                         progress: getProgressFor(category: category)
                     ) {
-                        selectedCategory = category
-                        showSwipeView = true
+                        navigationPath.append(SwipeViewDestination.category(category))
                     }
                 }
             }
@@ -170,8 +194,7 @@ struct HomeView: View {
                          count: timeGroupInfo.photosCount,
                          progress: timeGroupInfo.progress
                      ) {
-                         selectedTimeGroup = timeGroupInfo.timeGroup.rawValue
-                         showSwipeView = true
+                         navigationPath.append(SwipeViewDestination.timeGroup(timeGroupInfo.timeGroup.rawValue))
                      }
                  }
              }
@@ -364,4 +387,4 @@ struct TimelineCard: View {
 #Preview {
     HomeView()
         .environmentObject(DataManager())
-} 
+}

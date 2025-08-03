@@ -17,6 +17,8 @@ struct AlbumsView: View {
     @State private var isLoading = false
     @State private var showSwipeView = false
     @State private var selectedAlbumInfo: AlbumInfo?
+    @State private var showSearchBar = false
+    @State private var userAlbumsOrder: [String] = []
     
     var body: some View {
         NavigationView {
@@ -89,26 +91,45 @@ struct AlbumsView: View {
             // 搜索栏和创建按钮（仅在已授权时显示）
             if dataManager.photoLibraryManager.authorizationStatus == .authorized {
                 HStack(spacing: 12) {
-                    // 搜索栏
-                    HStack {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.gray)
-                        
-                        TextField("搜索相册", text: $searchText)
-                            .font(.system(size: 16, weight: .regular))
-                            .foregroundColor(.white)
+                    // 搜索栏（条件显示）
+                    if showSearchBar {
+                        HStack {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.gray)
+                            
+                            TextField("搜索相册", text: $searchText)
+                                .font(.system(size: 16, weight: .regular))
+                                .foregroundColor(.white)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.gray.opacity(0.1))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                                )
+                        )
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.gray.opacity(0.1))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-                            )
-                    )
+                    
+                    // 搜索按钮（当搜索栏隐藏时显示）
+                    if !showSearchBar {
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                showSearchBar = true
+                            }
+                        }) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .frame(width: 44, height: 44)
+                                .background(Color.gray.opacity(0.6))
+                                .cornerRadius(8)
+                        }
+                    }
                     
                     // 创建相册按钮
                     Button(action: {
@@ -174,7 +195,26 @@ struct AlbumsView: View {
     // MARK: - 相册列表
     private var albumsList: some View {
         ScrollView {
-            LazyVStack(spacing: 16) {
+            LazyVStack(spacing: 12) {
+                // 下拉区域（用于显示搜索框）
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(height: 20)
+                    .gesture(
+                        DragGesture()
+                            .onEnded { value in
+                                if value.translation.height > 50 && !showSearchBar {
+                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                        showSearchBar = true
+                                    }
+                                } else if value.translation.height < -50 && showSearchBar {
+                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                        showSearchBar = false
+                                        searchText = ""
+                                    }
+                                }
+                            }
+                    )
                 if isLoading {
                     VStack(spacing: 12) {
                         ProgressView()
@@ -214,7 +254,8 @@ struct AlbumsView: View {
                                         if let collection = albumInfo.assetCollection {
                                             deleteAlbum(collection)
                                         }
-                                    }
+                                    },
+                                    isCompact: true
                                 )
                                 .padding(.horizontal, 24)
                             }
@@ -230,7 +271,7 @@ struct AlbumsView: View {
                                 .padding(.horizontal, 24)
                                 .padding(.top, 12)
                             
-                            ForEach(filteredUserAlbums) { albumInfo in
+                            ForEach(orderedUserAlbums, id: \.id) { albumInfo in
                                 AlbumInfoRow(
                                     albumInfo: albumInfo,
                                     photoLibraryManager: dataManager.photoLibraryManager,
@@ -248,10 +289,12 @@ struct AlbumsView: View {
                                         if let collection = albumInfo.assetCollection {
                                             deleteAlbum(collection)
                                         }
-                                    }
+                                    },
+                                    isCompact: true
                                 )
                                 .padding(.horizontal, 24)
                             }
+                            .onMove(perform: moveUserAlbums)
                         }
                     }
                     
@@ -303,7 +346,35 @@ struct AlbumsView: View {
         }
     }
     
+    private var orderedUserAlbums: [AlbumInfo] {
+        let albums = filteredUserAlbums
+        if userAlbumsOrder.isEmpty {
+            return albums
+        }
+        
+        // 根据保存的顺序重新排列相册
+        var orderedAlbums: [AlbumInfo] = []
+        var remainingAlbums = albums
+        
+        // 按照保存的顺序添加相册
+        for albumId in userAlbumsOrder {
+            if let index = remainingAlbums.firstIndex(where: { $0.id == albumId }) {
+                orderedAlbums.append(remainingAlbums.remove(at: index))
+            }
+        }
+        
+        // 添加新的相册（不在保存顺序中的）
+        orderedAlbums.append(contentsOf: remainingAlbums)
+        
+        return orderedAlbums
+    }
+    
     // MARK: - 方法
+    private func moveUserAlbums(from source: IndexSet, to destination: Int) {
+        var newOrder = orderedUserAlbums.map { $0.id }
+        newOrder.move(fromOffsets: source, toOffset: destination)
+        userAlbumsOrder = newOrder
+    }
     
     private func deleteAlbum(_ album: PHAssetCollection) {
         // 只有用户创建的相册可以删除（非系统相册）
@@ -330,9 +401,19 @@ struct AlbumInfoRow: View {
     let onTap: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let isCompact: Bool
     
     @State private var dragOffset: CGSize = .zero
     @State private var thumbnailImage: UIImage?
+    
+    init(albumInfo: AlbumInfo, photoLibraryManager: PhotoLibraryManager, onTap: @escaping () -> Void, onEdit: @escaping () -> Void, onDelete: @escaping () -> Void, isCompact: Bool = false) {
+        self.albumInfo = albumInfo
+        self.photoLibraryManager = photoLibraryManager
+        self.onTap = onTap
+        self.onEdit = onEdit
+        self.onDelete = onDelete
+        self.isCompact = isCompact
+    }
     
     var body: some View {
         Button(action: onTap) {
@@ -373,38 +454,38 @@ struct AlbumInfoRow: View {
                 .animation(.easeInOut(duration: 0.2), value: dragOffset)
                 
                 // 主要内容
-                HStack(spacing: 16) {
+                HStack(spacing: isCompact ? 12 : 16) {
                     // 相册缩略图
                     Group {
                         if let image = thumbnailImage {
                             Image(uiImage: image)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
-                                .frame(width: 60, height: 60)
+                                .frame(width: isCompact ? 50 : 60, height: isCompact ? 50 : 60)
                                 .clipped()
                                 .cornerRadius(8)
                         } else {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 8)
                                     .fill(albumInfo.type.color.opacity(0.3))
-                                    .frame(width: 60, height: 60)
+                                    .frame(width: isCompact ? 50 : 60, height: isCompact ? 50 : 60)
                                 
                                 Image(systemName: albumInfo.type.icon)
-                                    .font(.system(size: 20, weight: .medium))
+                                    .font(.system(size: isCompact ? 16 : 20, weight: .medium))
                                     .foregroundColor(albumInfo.type.color)
                             }
                         }
                     }
                     
                     // 相册信息
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: isCompact ? 2 : 4) {
                         Text(albumInfo.title)
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.system(size: isCompact ? 14 : 16, weight: .semibold))
                             .foregroundColor(.white)
                             .lineLimit(1)
                         
                         Text("\(albumInfo.photosCount) 张照片")
-                            .font(.system(size: 14, weight: .regular))
+                            .font(.system(size: isCompact ? 12 : 14, weight: .regular))
                             .foregroundColor(.gray)
                     }
                     
@@ -444,7 +525,7 @@ struct AlbumInfoRow: View {
                             .foregroundColor(.gray.opacity(0.6))
                     }
                 }
-                .padding(12)
+                .padding(isCompact ? 8 : 12)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.gray.opacity(0.1))
@@ -748,4 +829,4 @@ struct EditAlbumView: View {
 #Preview {
     AlbumsView()
         .environmentObject(DataManager())
-} 
+}

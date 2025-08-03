@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PhotoDel is an iOS app for photo organization and deletion with intuitive swipe gestures. The app features a dark theme design and supports both demo mode with virtual photos and real Photos library integration.
+PhotoDel is an iOS app for photo organization and deletion with intuitive swipe gestures. The app features a dark theme design and real Photos library integration.
 
 ## Development Commands
 
@@ -24,7 +24,7 @@ xcodebuild clean -project PhotoDel.xcodeproj -scheme PhotoDel
 ```
 
 ### Testing Options
-- **Simulator**: Quick UI development with virtual photos (1,234 demo photos)
+- **Simulator**: Quick UI development and testing
 - **Real Device**: Required for full Photos framework testing and performance validation
 
 ## Architecture
@@ -50,8 +50,7 @@ xcodebuild clean -project PhotoDel.xcodeproj -scheme PhotoDel
 
 **Candidate Library Pattern**: Instead of immediate deletions, photos are staged in `deleteCandidates` and `favoriteCandidates` sets, then batch-processed when user confirms.
 
-**Dual Mode Support**: 
-- Virtual photos for demo/testing (DataManager virtual methods)
+**Real Photos Integration**: 
 - Real Photos library integration (PhotoLibraryManager)
 
 **Authorization Flow**: App requests Photos library access on first real photo interaction, not at startup.
@@ -103,7 +102,7 @@ Progress indicators show organization completion for each time group.
 ## Development Guidelines
 
 ### Testing Strategy
-1. **Simulator Development**: Use virtual photos for UI iteration
+1. **Simulator Development**: UI development and testing
 2. **Real Device Testing**: Essential for Photos framework validation
 3. **Permission Testing**: Verify authorization flow on fresh installs
 

@@ -24,6 +24,8 @@ struct SwipePhotoView: View {
     @State private var showPhotoAccessAlert = false
     @State private var showBatchConfirm = false
     @State private var currentPhotoIndex = 0
+    @State private var showCompletionMessage = false
+    @State private var favoriteRefreshTrigger = false
     
     enum SwipeDirection {
         case left, right, up, down
@@ -69,6 +71,8 @@ struct SwipePhotoView: View {
     
     private var isCurrentPhotoFavorited: Bool {
         guard let asset = currentRealPhoto else { return false }
+        // 使用refreshTrigger来强制刷新状态
+        _ = favoriteRefreshTrigger
         return asset.isFavorite
     }
     
@@ -90,6 +94,7 @@ struct SwipePhotoView: View {
             }
         }
         .navigationBarHidden(true)
+        .toolbar(.hidden, for: .tabBar)
         .sheet(isPresented: $showBatchConfirm) {
             BatchConfirmView()
                 .environmentObject(dataManager)
@@ -217,6 +222,58 @@ struct SwipePhotoView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(
+                        // 完成提示覆盖层
+                        Group {
+                            if showCompletionMessage {
+                                ZStack {
+                                    Color.black.opacity(0.7)
+                                        .ignoresSafeArea()
+                                    
+                                    VStack(spacing: 20) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .font(.system(size: 60))
+                                            .foregroundColor(.green)
+                                        
+                                        Text("整理完成！")
+                                            .font(.title2)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.white)
+                                        
+                                        Text("您已经浏览完所有照片")
+                                            .font(.body)
+                                            .foregroundColor(.gray)
+                                        
+                                        HStack(spacing: 20) {
+                                            Button("继续整理") {
+                                                showCompletionMessage = false
+                                            }
+                                            .padding(.horizontal, 20)
+                                            .padding(.vertical, 10)
+                                            .background(Color.blue)
+                                            .foregroundColor(.white)
+                                            .cornerRadius(8)
+                                            
+                                            Button("完成整理") {
+                                                showBatchConfirm = true
+                                                showCompletionMessage = false
+                                            }
+                                            .padding(.horizontal, 20)
+                                            .padding(.vertical, 10)
+                                            .background(Color.green)
+                                            .foregroundColor(.white)
+                                            .cornerRadius(8)
+                                        }
+                                    }
+                                    .padding()
+                                    .background(Color.black.opacity(0.8))
+                                    .cornerRadius(16)
+                                    .padding(.horizontal, 40)
+                                }
+                                .transition(.opacity)
+                            }
+                        }
+                    )
                 } else {
                     // 没有更多照片 - 增强的调试信息
                     VStack(spacing: 20) {
@@ -354,34 +411,28 @@ struct SwipePhotoView: View {
             // 用户相册快速归类按钮（仅在非相册模式下显示）
             if !isAlbumMode && !dataManager.userAlbums.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 8) {
                         ForEach(dataManager.userAlbums) { albumInfo in
                             Button(action: {
                                 handleAddToAlbum(albumInfo)
                             }) {
-                                VStack(spacing: 4) {
-                                    ZStack {
-                                        Circle()
+                                Text(albumInfo.title)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 16)
                                             .fill(Color.purple.opacity(0.8))
-                                            .frame(width: 40, height: 40)
-                                        
-                                        Image(systemName: "folder.fill")
-                                            .font(.system(size: 16, weight: .medium))
-                                            .foregroundColor(.white)
-                                    }
-                                    
-                                    Text(albumInfo.title)
-                                        .font(.system(size: 10, weight: .medium))
-                                        .foregroundColor(.gray)
-                                        .lineLimit(1)
-                                }
+                                    )
+                                    .lineLimit(1)
                             }
                             .buttonStyle(PlainButtonStyle())
                         }
                     }
                     .padding(.horizontal, 24)
                 }
-                .frame(height: 60)
+                .frame(height: 40)
             }
             
             // 功能按钮
@@ -457,6 +508,22 @@ struct SwipePhotoView: View {
     private func handleSwipeGesture(translation: CGSize) {
         let threshold: CGFloat = 100
         
+        // 如果显示完成消息，允许滑动操作
+        if showCompletionMessage {
+            if abs(translation.width) > threshold {
+                if translation.width < 0 {
+                    // 左滑：显示批量确认
+                    showBatchConfirm = true
+                    showCompletionMessage = false
+                } else {
+                    // 右滑：关闭完成提示
+                    showCompletionMessage = false
+                }
+            }
+            resetCardPosition()
+            return
+        }
+        
         guard let asset = currentRealPhoto, isValidPhotoIndex(currentPhotoIndex) else { 
             resetCardPosition()
             return 
@@ -501,8 +568,10 @@ struct SwipePhotoView: View {
                 size: CGSize(width: 350, height: 450), 
                 maxCount: 5
             )
+        } else {
+            // 到达最后一张照片时显示完成提示
+            showCompletionMessage = true
         }
-        // 如果到达最后一张照片，保持在当前位置
     }
     
     private func moveToPreviousPhoto() {
@@ -522,8 +591,13 @@ struct SwipePhotoView: View {
         let isFavorited = asset.isFavorite
         dataManager.toggleFavoriteStatus(asset, shouldFavorite: !isFavorited)
         
-        // 自动移动到下一张照片
-        moveToNextPhoto()
+        // 强制刷新UI以更新收藏状态显示
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            favoriteRefreshTrigger.toggle()
+        }
+        
+        // 收藏后不自动移动到下一张照片，让用户可以继续操作同一张照片
+        // moveToNextPhoto() // 注释掉自动移动
     }
     
     private func handleDeleteAction() {

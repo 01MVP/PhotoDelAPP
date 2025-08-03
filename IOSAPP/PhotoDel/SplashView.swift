@@ -8,8 +8,11 @@
 import SwiftUI
 
 struct SplashView: View {
+    @StateObject private var dataManager = DataManager()
     @State private var showMainApp = false
     @State private var animateIcon = false
+    @State private var loadingText = "正在准备..."
+    @State private var showProgress = false
     
     var body: some View {
         ZStack {
@@ -47,24 +50,103 @@ struct SplashView: View {
                 .opacity(animateIcon ? 1.0 : 0.0)
                 .animation(.easeOut(duration: 0.6).delay(0.2), value: animateIcon)
                 
+                // 加载进度区域
+                if showProgress {
+                    VStack(spacing: 16) {
+                        // 进度条
+                        if dataManager.photoLibraryManager.isLoading {
+                            VStack(spacing: 8) {
+                                ProgressView(value: dataManager.photoLibraryManager.loadingProgress)
+                                    .progressViewStyle(LinearProgressViewStyle(tint: .white))
+                                    .frame(width: 200)
+                                
+                                Text("\(Int(dataManager.photoLibraryManager.loadingProgress * 100))%")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.white)
+                            }
+                        }
+                        
+                        // 加载状态文字
+                        Text(loadingText)
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.center)
+                    }
+                    .transition(.opacity)
+                }
+                
                 Spacer()
             }
         }
         .onAppear {
-            // 简单动画后快速跳转
+            // 启动动画
             animateIcon = true
             
-            // 0.8秒后直接跳转到主应用
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                showMainApp = true
+            // 检查照片库权限状态
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                checkPhotoLibraryStatus()
             }
         }
         .fullScreenCover(isPresented: $showMainApp) {
             MainTabView()
+                .environmentObject(dataManager)
+        }
+    }
+    
+    private func checkPhotoLibraryStatus() {
+        if dataManager.photoLibraryManager.authorizationStatus == .authorized {
+            // 已授权，显示加载进度
+            showProgress = true
+            loadingText = "正在加载照片库..."
+            
+            // 监听加载完成
+            monitorLoadingProgress()
+        } else if dataManager.photoLibraryManager.authorizationStatus == .notDetermined {
+            // 未确定权限，显示准备状态
+            showProgress = true
+            loadingText = "正在准备照片库访问..."
+            
+            // 等待权限请求结果
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                showMainApp = true
+            }
+        } else {
+            // 权限被拒绝，直接进入主应用
+            loadingText = "准备完成"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                showMainApp = true
+            }
+        }
+    }
+    
+    private func monitorLoadingProgress() {
+        // 监听加载进度
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+            if !dataManager.photoLibraryManager.isLoading {
+                // 加载完成
+                timer.invalidate()
+                loadingText = "准备完成！"
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    showMainApp = true
+                }
+            } else {
+                // 更新加载文字
+                let progress = dataManager.photoLibraryManager.loadingProgress
+                if progress < 0.3 {
+                    loadingText = "正在扫描照片库..."
+                } else if progress < 0.6 {
+                    loadingText = "正在分析照片信息..."
+                } else if progress < 0.9 {
+                    loadingText = "正在整理照片分类..."
+                } else {
+                    loadingText = "即将完成..."
+                }
+            }
         }
     }
 }
 
 #Preview {
     SplashView()
-} 
+}
