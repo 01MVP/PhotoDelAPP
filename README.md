@@ -1,0 +1,1 @@
+cd IOSAPP && xcodebuild -project PhotoDel.xcodeproj -scheme PhotoDel -destination 'platform=iOS Simulator,name=iPhone 15' clean build 

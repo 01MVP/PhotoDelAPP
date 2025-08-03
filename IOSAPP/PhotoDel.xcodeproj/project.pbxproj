@@ -27,7 +27,6 @@
 		C8964B022E2162AB00B434E4 /* PhotoDel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhotoDel.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C8964B0F2E2162AE00B434E4 /* PhotoDelTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PhotoDelTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C8964B192E2162AE00B434E4 /* PhotoDelUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PhotoDelUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		C8B0B7522E2507E500A7E699 /* PhotoDel.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = PhotoDel.xcodeproj; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -76,7 +75,6 @@
 		C8964AF92E2162AB00B434E4 = {
 			isa = PBXGroup;
 			children = (
-				C8B0B7522E2507E500A7E699 /* PhotoDel.xcodeproj */,
 				C8964B042E2162AB00B434E4 /* PhotoDel */,
 				C8964B122E2162AE00B434E4 /* PhotoDelTests */,
 				C8964B1C2E2162AE00B434E4 /* PhotoDelUITests */,
@@ -413,13 +411,9 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.01MVP.PhotoDel;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -446,13 +440,9 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.01MVP.PhotoDel;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};

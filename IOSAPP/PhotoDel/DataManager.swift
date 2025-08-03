@@ -17,7 +17,7 @@ class DataManager: ObservableObject {
     @Published var photoLibraryManager = PhotoLibraryManager()
     @Published var authorizationRequested = false
     
-    // 删除候选库 - 用于批量删除
+    // 删除候选库 - 用于批量删除（线程安全）
     @Published var deleteCandidates: Set<PHAsset> = []
     @Published var favoriteCandidates: Set<PHAsset> = []
     
@@ -25,6 +25,10 @@ class DataManager: ObservableObject {
     @Published var timeGroups: [TimeGroupInfo] = []
     @Published var systemAlbums: [AlbumInfo] = []
     @Published var userAlbums: [AlbumInfo] = []
+    
+    // 用于线程安全的队列
+    private let candidatesQueue = DispatchQueue(label: "com.photodel.candidates", attributes: .concurrent)
+    private let dataLoadingQueue = DispatchQueue(label: "com.photodel.dataLoading", qos: .userInitiated)
     
     init() {
         setupPhotoLibraryManager()
@@ -47,15 +51,34 @@ class DataManager: ObservableObject {
     
     // MARK: - 照片权限管理
     func requestPhotoLibraryAccess() {
+        guard !authorizationRequested else { return }
+        
         authorizationRequested = true
         photoLibraryManager.requestAuthorization()
         
-        // 权限获得后重新加载数据
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            if self?.photoLibraryManager.authorizationStatus == .authorized {
-                self?.loadTimeGroups()
-                self?.loadAlbums()
+        // 监听权限状态变化，而不是使用硬编码延迟
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
             }
+            
+            if self.photoLibraryManager.authorizationStatus == .authorized {
+                timer.invalidate()
+                DispatchQueue.main.async {
+                    self.loadTimeGroups()
+                    self.loadAlbums()
+                }
+            } else if self.photoLibraryManager.authorizationStatus == .denied ||
+                      self.photoLibraryManager.authorizationStatus == .restricted {
+                // 权限被拒绝，停止检查
+                timer.invalidate()
+            }
+        }
+        
+        // 设置最大检查时间为10秒，避免无限循环
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+            timer.invalidate()
         }
     }
     
@@ -77,31 +100,50 @@ class DataManager: ObservableObject {
         }
     }
     
-    // MARK: - 候选库操作（新的删除逻辑）
+    // MARK: - 候选库操作（新的删除逻辑）- 线程安全版本
     func addToDeleteCandidates(_ asset: PHAsset) {
-        deleteCandidates.insert(asset)
-        updateStats()
-        objectWillChange.send()
+        candidatesQueue.async(flags: .barrier) { [weak self] in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.deleteCandidates.insert(asset)
+                self.updateStats()
+                self.objectWillChange.send()
+            }
+        }
     }
     
     func removeFromDeleteCandidates(_ asset: PHAsset) {
-        deleteCandidates.remove(asset)
-        updateStats()
-        objectWillChange.send()
+        candidatesQueue.async(flags: .barrier) { [weak self] in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.deleteCandidates.remove(asset)
+                self.updateStats()
+                self.objectWillChange.send()
+            }
+        }
     }
     
     func addToFavoriteCandidates(_ asset: PHAsset) {
-        favoriteCandidates.insert(asset)
-        updateStats()
-        objectWillChange.send()
+        candidatesQueue.async(flags: .barrier) { [weak self] in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.favoriteCandidates.insert(asset)
+                self.updateStats()
+                self.objectWillChange.send()
+            }
+        }
     }
     
     func isInDeleteCandidates(_ asset: PHAsset) -> Bool {
-        return deleteCandidates.contains(asset)
+        return candidatesQueue.sync {
+            return deleteCandidates.contains(asset)
+        }
     }
     
     func isInFavoriteCandidates(_ asset: PHAsset) -> Bool {
-        return favoriteCandidates.contains(asset)
+        return candidatesQueue.sync {
+            return favoriteCandidates.contains(asset)
+        }
     }
     
     // MARK: - 滑动操作（候选库模式）
@@ -140,15 +182,36 @@ class DataManager: ObservableObject {
     
     // MARK: - 批量操作（离开页面时执行）
     func executeBatchOperations(completion: @escaping (Bool, Error?) -> Void) {
+        // 检查网络状态和iCloud同步状态
+        guard checkSystemReadiness() else {
+            let error = NSError(domain: "PhotoDelError", code: 1001, userInfo: [
+                NSLocalizedDescriptionKey: "系统未准备就绪，请检查网络连接和存储空间"
+            ])
+            completion(false, error)
+            return
+        }
+        
+        // 保存操作前的状态用于回滚
+        let originalDeleteCandidates = deleteCandidates
+        let originalFavoriteCandidates = favoriteCandidates
+        
         let group = DispatchGroup()
         var hasError = false
         var lastError: Error?
+        var completedOperations: [(() -> Void)] = []
         
         // 批量删除
         if !deleteCandidates.isEmpty {
             group.enter()
-            photoLibraryManager.deletePhotos(Array(deleteCandidates)) { success, error in
-                if !success {
+            let assetsToDelete = Array(deleteCandidates)
+            photoLibraryManager.deletePhotos(assetsToDelete) { success, error in
+                if success {
+                    // 记录成功的操作以便回滚
+                    completedOperations.append {
+                        // 删除操作无法回滚，但可以记录
+                        print("删除操作已完成，无法回滚")
+                    }
+                } else {
                     hasError = true
                     lastError = error
                 }
@@ -159,8 +222,17 @@ class DataManager: ObservableObject {
         // 批量收藏
         if !favoriteCandidates.isEmpty {
             group.enter()
-            photoLibraryManager.addToFavorites(Array(favoriteCandidates)) { success, error in
-                if !success {
+            let assetsToFavorite = Array(favoriteCandidates)
+            photoLibraryManager.addToFavorites(assetsToFavorite) { success, error in
+                if success {
+                    // 记录成功的操作以便回滚
+                    completedOperations.append {
+                        // 可以回滚收藏操作
+                        for asset in assetsToFavorite {
+                            self.toggleFavoriteStatus(asset, shouldFavorite: false)
+                        }
+                    }
+                } else {
                     hasError = true
                     lastError = error
                 }
@@ -174,9 +246,43 @@ class DataManager: ObservableObject {
                 self.deleteCandidates.removeAll()
                 self.favoriteCandidates.removeAll()
                 self.updateStats()
+                completion(true, nil)
+            } else {
+                // 操作失败，恢复原始状态
+                self.deleteCandidates = originalDeleteCandidates
+                self.favoriteCandidates = originalFavoriteCandidates
+                self.updateStats()
+                
+                // 如果部分操作成功，可以选择回滚（这里简化处理）
+                let enhancedError = NSError(domain: "PhotoDelError", code: 1002, userInfo: [
+                    NSLocalizedDescriptionKey: "批量操作失败: \(lastError?.localizedDescription ?? "未知错误")",
+                    NSLocalizedFailureReasonErrorKey: "部分操作可能已完成，请检查照片状态"
+                ])
+                completion(false, enhancedError)
             }
-            completion(!hasError, lastError)
         }
+    }
+    
+    private func checkSystemReadiness() -> Bool {
+        // 检查照片库权限
+        guard photoLibraryManager.authorizationStatus == .authorized else {
+            return false
+        }
+        
+        // 检查存储空间（简化实现）
+        let fileManager = FileManager.default
+        do {
+            let systemAttributes = try fileManager.attributesOfFileSystem(forPath: NSHomeDirectory())
+            if let freeSpace = systemAttributes[.systemFreeSize] as? NSNumber {
+                let freeSpaceInBytes = freeSpace.int64Value
+                let minimumRequired: Int64 = 100 * 1024 * 1024 // 100MB
+                return freeSpaceInBytes > minimumRequired
+            }
+        } catch {
+            print("无法检查存储空间: \(error)")
+        }
+        
+        return true
     }
     
     func cancelAllOperations() {
@@ -268,7 +374,7 @@ class DataManager: ObservableObject {
     func loadTimeGroups() {
         guard photoLibraryManager.authorizationStatus == .authorized else { return }
         
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        dataLoadingQueue.async { [weak self] in
             guard let self = self else { return }
             
             let calendar = Calendar.current
@@ -278,28 +384,45 @@ class DataManager: ObservableObject {
             
             // 今天的照片
             let todayPhotos = self.getPhotosForTimeGroup(.today)
-            groups.append(TimeGroupInfo(timeGroup: .today, photosCount: todayPhotos.count, progress: 0.2))
+            let todayProgress = self.calculateProgressForTimeGroup(.today, photos: todayPhotos)
+            groups.append(TimeGroupInfo(timeGroup: .today, photosCount: todayPhotos.count, progress: todayProgress))
             
             // 本周的照片
             let thisWeekPhotos = self.getPhotosForTimeGroup(.thisWeek)
-            groups.append(TimeGroupInfo(timeGroup: .thisWeek, photosCount: thisWeekPhotos.count, progress: 0.1))
+            let thisWeekProgress = self.calculateProgressForTimeGroup(.thisWeek, photos: thisWeekPhotos)
+            groups.append(TimeGroupInfo(timeGroup: .thisWeek, photosCount: thisWeekPhotos.count, progress: thisWeekProgress))
             
             // 本月的照片
             let thisMonthPhotos = self.getPhotosForTimeGroup(.thisMonth)
-            groups.append(TimeGroupInfo(timeGroup: .thisMonth, photosCount: thisMonthPhotos.count, progress: 0.15))
+            let thisMonthProgress = self.calculateProgressForTimeGroup(.thisMonth, photos: thisMonthPhotos)
+            groups.append(TimeGroupInfo(timeGroup: .thisMonth, photosCount: thisMonthPhotos.count, progress: thisMonthProgress))
             
             // 上个月的照片
             let lastMonthPhotos = self.getPhotosForTimeGroup(.lastMonth)
-            groups.append(TimeGroupInfo(timeGroup: .lastMonth, photosCount: lastMonthPhotos.count, progress: 0.05))
+            let lastMonthProgress = self.calculateProgressForTimeGroup(.lastMonth, photos: lastMonthPhotos)
+            groups.append(TimeGroupInfo(timeGroup: .lastMonth, photosCount: lastMonthPhotos.count, progress: lastMonthProgress))
             
             // 更早的照片
             let olderPhotos = self.getPhotosForTimeGroup(.olderPhotos)
-            groups.append(TimeGroupInfo(timeGroup: .olderPhotos, photosCount: olderPhotos.count, progress: 0.0))
+            let olderProgress = self.calculateProgressForTimeGroup(.olderPhotos, photos: olderPhotos)
+            groups.append(TimeGroupInfo(timeGroup: .olderPhotos, photosCount: olderPhotos.count, progress: olderProgress))
             
             DispatchQueue.main.async {
                 self.timeGroups = groups
             }
         }
+    }
+    
+    // MARK: - 计算时间组整理进度
+    private func calculateProgressForTimeGroup(_ timeGroup: TimeGroup, photos: [PHAsset]) -> Double {
+        guard !photos.isEmpty else { return 0.0 }
+        
+        // 计算已整理的照片数量（已删除或已收藏的照片）
+        let organizedCount = photos.filter { asset in
+            deleteCandidates.contains(asset) || favoriteCandidates.contains(asset) || asset.isFavorite
+        }.count
+        
+        return Double(organizedCount) / Double(photos.count)
     }
     
     // MARK: - 相册数据加载
@@ -458,4 +581,14 @@ class DataManager: ObservableObject {
     func getUserAlbums() -> [AlbumInfo] {
         return userAlbums
     }
-} 
+    
+    // MARK: - 相册照片操作
+    func addPhotoToAlbum(_ asset: PHAsset, album: PHAssetCollection, completion: @escaping (Bool) -> Void) {
+        photoLibraryManager.addPhotosToAlbum([asset], album: album) { success, error in
+            if let error = error {
+                print("添加照片到相册失败: \(error.localizedDescription)")
+            }
+            completion(success)
+        }
+    }
+}

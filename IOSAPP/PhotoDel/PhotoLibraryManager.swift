@@ -14,19 +14,38 @@ class PhotoLibraryManager: NSObject, ObservableObject {
     
     private var allPhotosResult: PHFetchResult<PHAsset>?
     private let imageManager = PHImageManager.default()
+    private let imageCache = NSCache<NSString, UIImage>()
+    
+    private var isObserverRegistered = false
     
     override init() {
         super.init()
+        // 配置图片缓存
+        imageCache.countLimit = 50 // 最多缓存50张图片
+        imageCache.totalCostLimit = 100 * 1024 * 1024 // 100MB内存限制
+        
         // 延迟初始化，避免启动时崩溃
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.checkAuthorizationStatus()
-            PHPhotoLibrary.shared().register(self)
+            self.registerPhotoLibraryObserver()
         }
     }
     
     deinit {
+        unregisterPhotoLibraryObserver()
+    }
+    
+    private func registerPhotoLibraryObserver() {
+        guard !isObserverRegistered else { return }
+        PHPhotoLibrary.shared().register(self)
+        isObserverRegistered = true
+    }
+    
+    private func unregisterPhotoLibraryObserver() {
+        guard isObserverRegistered else { return }
         PHPhotoLibrary.shared().unregisterChangeObserver(self)
+        isObserverRegistered = false
     }
     
     // MARK: - Authorization
@@ -55,37 +74,89 @@ class PhotoLibraryManager: NSObject, ObservableObject {
         loadingProgress = 0
         
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            // 获取所有照片
+            guard let self = self else { return }
+            
+            // 分页加载照片以避免内存压力
+            let batchSize = 500 // 每批加载500张照片
+            
+            // 获取所有照片的数量
             let fetchOptions = PHFetchOptions()
             fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
             
             let allPhotosResult = PHAsset.fetchAssets(with: fetchOptions)
-            self?.allPhotosResult = allPhotosResult
+            self.allPhotosResult = allPhotosResult
             
-            // 转换为数组
+            let totalCount = allPhotosResult.count
             var allPhotosArray: [PHAsset] = []
-            allPhotosResult.enumerateObjects { asset, _, _ in
-                allPhotosArray.append(asset)
+            
+            // 分批处理照片
+            for batchStart in stride(from: 0, to: totalCount, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, totalCount)
+                let batchRange = NSRange(location: batchStart, length: batchEnd - batchStart)
+                
+                // 批量获取资产
+                var batchAssets: [PHAsset] = []
+                allPhotosResult.enumerateObjects(at: IndexSet(integersIn: batchRange.location..<(batchRange.location + batchRange.length))) { asset, _, _ in
+                    batchAssets.append(asset)
+                }
+                
+                allPhotosArray.append(contentsOf: batchAssets)
+                
+                // 更新进度
+                DispatchQueue.main.async {
+                    self.loadingProgress = Double(batchEnd) / Double(totalCount) * 0.6 // 60%用于基础加载
+                }
+                
+                // 避免内存峰值，添加小延迟
+                if batchEnd < totalCount {
+                    usleep(100000) // 100ms = 100,000 microseconds
+                }
             }
             
             DispatchQueue.main.async {
-                self?.loadingProgress = 0.3
+                self.loadingProgress = 0.6
             }
             
-            // 分类照片
-            let videos = allPhotosArray.filter { $0.mediaType == .video }
-            
-            DispatchQueue.main.async {
-                self?.loadingProgress = 0.5
+            // 异步分类照片，避免阻塞
+            self.categorizePhotos(allPhotosArray) { videos, screenshots, favorites in
+                DispatchQueue.main.async {
+                    self.allPhotos = allPhotosArray
+                    self.videos = videos
+                    self.screenshots = screenshots
+                    self.favorites = favorites
+                    self.loadingProgress = 1.0
+                    self.isLoading = false
+                }
             }
+        }
+    }
+    
+    private func categorizePhotos(_ photos: [PHAsset], completion: @escaping ([PHAsset], [PHAsset], [PHAsset]) -> Void) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
             
-            // 检测截图 (通过元数据和尺寸判断)
-            let screenshots = allPhotosArray.filter { asset in
-                asset.mediaType == .image && self?.isScreenshot(asset) == true
-            }
+            var videos: [PHAsset] = []
+            var screenshots: [PHAsset] = []
             
-            DispatchQueue.main.async {
-                self?.loadingProgress = 0.7
+            // 分批处理分类以避免内存压力
+            let batchSize = 100
+            for batchStart in stride(from: 0, to: photos.count, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, photos.count)
+                let batch = Array(photos[batchStart..<batchEnd])
+                
+                for asset in batch {
+                    if asset.mediaType == .video {
+                        videos.append(asset)
+                    } else if self.isScreenshot(asset) {
+                        screenshots.append(asset)
+                    }
+                }
+                
+                // 更新进度
+                DispatchQueue.main.async {
+                    let progress = 0.6 + (Double(batchEnd) / Double(photos.count)) * 0.3 // 30%用于分类
+                    self.loadingProgress = progress
+                }
             }
             
             // 获取收藏的照片
@@ -99,14 +170,7 @@ class PhotoLibraryManager: NSObject, ObservableObject {
                 favoritesArray.append(asset)
             }
             
-            DispatchQueue.main.async {
-                self?.allPhotos = allPhotosArray
-                self?.videos = videos
-                self?.screenshots = screenshots
-                self?.favorites = favoritesArray
-                self?.loadingProgress = 1.0
-                self?.isLoading = false
-            }
+            completion(videos, screenshots, favoritesArray)
         }
     }
     
@@ -175,6 +239,14 @@ class PhotoLibraryManager: NSObject, ObservableObject {
     // MARK: - Image Loading
     
     func loadImage(for asset: PHAsset, size: CGSize, completion: @escaping (UIImage?) -> Void) {
+        let cacheKey = "\(asset.localIdentifier)_\(Int(size.width))x\(Int(size.height))" as NSString
+        
+        // 检查缓存
+        if let cachedImage = imageCache.object(forKey: cacheKey) {
+            completion(cachedImage)
+            return
+        }
+        
         let options = PHImageRequestOptions()
         options.deliveryMode = .opportunistic
         options.resizeMode = .fast
@@ -185,10 +257,46 @@ class PhotoLibraryManager: NSObject, ObservableObject {
             targetSize: size,
             contentMode: .aspectFill,
             options: options
-        ) { image, _ in
+        ) { [weak self] image, _ in
             DispatchQueue.main.async {
+                // 缓存图片
+                if let image = image {
+                    let cost = Int(image.size.width * image.size.height * 4) // 估算内存使用
+                    self?.imageCache.setObject(image, forKey: cacheKey, cost: cost)
+                }
                 completion(image)
             }
+        }
+    }
+    
+    func clearImageCache() {
+        imageCache.removeAllObjects()
+    }
+    
+    func preloadImagesForAssets(_ assets: [PHAsset], size: CGSize, maxCount: Int = 10) {
+        // 预加载接下来几张照片以提升用户体验
+        let assetsToPreload = Array(assets.prefix(maxCount))
+        
+        for asset in assetsToPreload {
+            let cacheKey = "\(asset.localIdentifier)_\(Int(size.width))x\(Int(size.height))" as NSString
+            
+            // 如果缓存中没有，则预加载
+            if imageCache.object(forKey: cacheKey) == nil {
+                loadImage(for: asset, size: size) { _ in
+                    // 预加载完成，不需要回调
+                }
+            }
+        }
+    }
+    
+    func handleMemoryWarning() {
+        // 清理一半的缓存
+        let currentCount = imageCache.countLimit
+        imageCache.countLimit = currentCount / 2
+        
+        // 重置缓存限制
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.imageCache.countLimit = currentCount
         }
     }
     

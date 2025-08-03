@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Photos
+import Foundation
 
 struct SwipePhotoView: View {
     @EnvironmentObject var dataManager: DataManager
@@ -30,11 +31,17 @@ struct SwipePhotoView: View {
     
     private var currentRealPhoto: PHAsset? {
         let photos = filteredRealPhotos
-        guard currentPhotoIndex < photos.count else { return nil }
+        guard !photos.isEmpty, currentPhotoIndex >= 0, currentPhotoIndex < photos.count else { 
+            return nil 
+        }
         return photos[currentPhotoIndex]
     }
     
     private var filteredRealPhotos: [PHAsset] {
+        guard dataManager.photoLibraryManager.authorizationStatus == .authorized else {
+            return []
+        }
+        
         if let albumInfo = selectedAlbumInfo {
             return dataManager.getPhotosForAlbum(albumInfo)
         } else if let category = selectedCategory {
@@ -89,6 +96,10 @@ struct SwipePhotoView: View {
         }
         .onDisappear {
             // 页面消失时的清理工作（不自动弹出确认对话框，因为用户可能只是切换到其他页面）
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            // 处理内存警告
+            dataManager.photoLibraryManager.handleMemoryWarning()
         }
     }
     
@@ -340,6 +351,39 @@ struct SwipePhotoView: View {
     // MARK: - 底部控制区域
     private var bottomControls: some View {
         VStack(spacing: 16) {
+            // 用户相册快速归类按钮（仅在非相册模式下显示）
+            if !isAlbumMode && !dataManager.userAlbums.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(dataManager.userAlbums) { albumInfo in
+                            Button(action: {
+                                handleAddToAlbum(albumInfo)
+                            }) {
+                                VStack(spacing: 4) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(Color.purple.opacity(0.8))
+                                            .frame(width: 40, height: 40)
+                                        
+                                        Image(systemName: "folder.fill")
+                                            .font(.system(size: 16, weight: .medium))
+                                            .foregroundColor(.white)
+                                    }
+                                    
+                                    Text(albumInfo.title)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundColor(.gray)
+                                        .lineLimit(1)
+                                }
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                }
+                .frame(height: 60)
+            }
+            
             // 功能按钮
             HStack(spacing: 0) {
                 Spacer()
@@ -413,7 +457,10 @@ struct SwipePhotoView: View {
     private func handleSwipeGesture(translation: CGSize) {
         let threshold: CGFloat = 100
         
-        guard let asset = currentRealPhoto else { return }
+        guard let asset = currentRealPhoto, isValidPhotoIndex(currentPhotoIndex) else { 
+            resetCardPosition()
+            return 
+        }
         
         if abs(translation.width) > threshold {
             if translation.width < 0 {
@@ -440,15 +487,32 @@ struct SwipePhotoView: View {
     }
     
     private func moveToNextPhoto() {
-        if currentPhotoIndex < filteredRealPhotos.count - 1 {
-            currentPhotoIndex += 1
+        let photos = filteredRealPhotos
+        guard !photos.isEmpty else { return }
+        
+        let newIndex = currentPhotoIndex + 1
+        if newIndex < photos.count {
+            currentPhotoIndex = newIndex
+            
+            // 预加载接下来的几张照片
+            let remainingPhotos = Array(photos.dropFirst(newIndex))
+            dataManager.photoLibraryManager.preloadImagesForAssets(
+                remainingPhotos, 
+                size: CGSize(width: 350, height: 450), 
+                maxCount: 5
+            )
         }
+        // 如果到达最后一张照片，保持在当前位置
     }
     
     private func moveToPreviousPhoto() {
-        if currentPhotoIndex > 0 {
-            currentPhotoIndex -= 1
-        }
+        guard currentPhotoIndex > 0 else { return }
+        currentPhotoIndex -= 1
+    }
+    
+    private func isValidPhotoIndex(_ index: Int) -> Bool {
+        let photos = filteredRealPhotos
+        return index >= 0 && index < photos.count
     }
     
     private func handleFavoriteAction() {
@@ -458,7 +522,8 @@ struct SwipePhotoView: View {
         let isFavorited = asset.isFavorite
         dataManager.toggleFavoriteStatus(asset, shouldFavorite: !isFavorited)
         
-        // 不自动移动到下一张照片，让用户可以看到状态变化
+        // 自动移动到下一张照片
+        moveToNextPhoto()
     }
     
     private func handleDeleteAction() {
@@ -474,6 +539,26 @@ struct SwipePhotoView: View {
     private func handleUndoAction() {
         // 撤销操作：回到上一张照片
         moveToPreviousPhoto()
+    }
+    
+    private func handleAddToAlbum(_ albumInfo: AlbumInfo) {
+        guard let asset = currentRealPhoto,
+              let assetCollection = albumInfo.assetCollection else { return }
+        
+        // 将照片添加到指定相册
+        dataManager.addPhotoToAlbum(asset, album: assetCollection) { success in
+            DispatchQueue.main.async {
+                if success {
+                    // 添加成功后移动到下一张照片
+                    self.moveToNextPhoto()
+                } else {
+                    // 添加失败，可以显示错误提示
+                    print("添加照片到相册失败")
+                }
+            }
+        }
+        
+        resetCardPosition()
     }
     
     private func resetCardPosition() {
@@ -755,7 +840,12 @@ struct BatchConfirmView: View {
     private func executeBatchOperations() {
         dataManager.executeBatchOperations { success, error in
             if success {
-                dismiss()
+                // 重新加载数据以更新主页
+                DispatchQueue.main.async {
+                    dataManager.loadTimeGroups()
+                    dataManager.loadAlbums()
+                    dismiss()
+                }
             } else {
                 // 处理错误
                 print("批量操作失败: \(error?.localizedDescription ?? "未知错误")")
@@ -772,4 +862,4 @@ struct BatchConfirmView: View {
 #Preview {
     SwipePhotoView(selectedCategory: PhotoCategory.all, selectedTimeGroup: nil, selectedAlbumInfo: nil)
         .environmentObject(DataManager())
-} 
+}

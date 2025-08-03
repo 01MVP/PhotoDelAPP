@@ -6,7 +6,9 @@
 //
 
 import SwiftUI
+#if canImport(MessageUI)
 import MessageUI
+#endif
 
 struct SettingsView: View {
     @EnvironmentObject var dataManager: DataManager
@@ -51,7 +53,20 @@ struct SettingsView: View {
         }
         .navigationBarHidden(true)
         .sheet(isPresented: $showingMailCompose) {
-            MailComposeView()
+            #if canImport(MessageUI)
+            if MFMailComposeViewController.canSendMail() {
+                MailComposeView()
+            } else {
+                // 如果设备不支持邮件，显示替代方案
+                Text("此设备不支持发送邮件")
+                    .foregroundColor(.white)
+                    .padding()
+            }
+            #else
+            Text("此设备不支持发送邮件")
+                .foregroundColor(.white)
+                .padding()
+            #endif
         }
         .sheet(isPresented: $showingAbout) {
             AboutView()
@@ -136,9 +151,9 @@ struct SettingsView: View {
                     icon: "envelope.fill",
                     iconColor: .green,
                     title: "邮件反馈",
-                    subtitle: "发送邮件告诉我们你的想法",
+                    subtitle: mailSubtitle,
                     action: {
-                        showingMailCompose = true
+                        handleMailAction()
                     }
                 )
                 
@@ -194,6 +209,22 @@ struct SettingsView: View {
                 .font(.system(size: 12, weight: .regular))
                 .foregroundColor(.gray.opacity(0.6))
         }
+    }
+    
+    private var mailSubtitle: String {
+        #if canImport(MessageUI)
+        return MFMailComposeViewController.canSendMail() ? "发送邮件告诉我们你的想法" : "此设备不支持邮件"
+        #else
+        return "此设备不支持邮件"
+        #endif
+    }
+    
+    private func handleMailAction() {
+        #if canImport(MessageUI)
+        if MFMailComposeViewController.canSendMail() {
+            showingMailCompose = true
+        }
+        #endif
     }
     
     // MARK: - 方法
@@ -275,6 +306,7 @@ struct SettingRow: View {
 }
 
 // MARK: - 邮件编写视图
+#if canImport(MessageUI)
 struct MailComposeView: UIViewControllerRepresentable {
     @Environment(\.dismiss) private var dismiss
     
@@ -316,6 +348,7 @@ struct MailComposeView: UIViewControllerRepresentable {
         }
     }
 }
+#endif
 
 // MARK: - 关于视图
 struct AboutView: View {
@@ -384,4 +417,4 @@ struct AboutView: View {
 #Preview {
     SettingsView()
         .environmentObject(DataManager())
-} 
+}
